@@ -20,7 +20,10 @@
     "pack": "electron-builder --dir",
     "predist": "npm run stage:helpers && npm run verify:helpers",
     "postdist": "npm run verify:helpers:packaged",
-    "dist": "electron-builder"
+    "dist": "electron-builder",
+    "dist:mac:universal": "electron-builder --mac dmg --universal",
+    "dist:mac:x64": "electron-builder --mac dmg --x64",
+    "dist:mac:arm64": "electron-builder --mac dmg --arm64"
   },
   "devDependencies": {
     "electron": "^40.8.0",
@@ -55,11 +58,13 @@
       "target": [
         "dmg"
       ],
-      "icon": "assets/ace_photo_studio.icns"
+      "icon": "assets/ace_photo_studio.icns",
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
     },
     "dmg": {
       "title": "ACE Photo Studio",
-      "icon": "assets/ace_photo_studio.icns"
+      "icon": "assets/ace_photo_studio.icns",
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
     }
   }
 }
