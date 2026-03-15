@@ -126,7 +126,7 @@ function registerExportsIpc({
             const noExt = strictName.replace(/\.jpg$/i, '');
             fileName = `${noExt}_${dedupeIndex}.jpg`;
           } else {
-            fileName = `${baseName}${suffix}_${dedupeIndex}.jpg`;
+            fileName = `${baseName}${suffix}-${dedupeIndex + 1}.jpg`;
           }
           dedupeIndex += 1;
         }

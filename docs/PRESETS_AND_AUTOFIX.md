@@ -54,7 +54,8 @@ Storage:
 Persisted fields currently include:
 
 - `exposure`, `contrast`, `highlights`, `shadows`, `whites`, `blacks`
-- `toneCurve` (clamped `0..100`)
+- `toneCurve` (legacy scalar `0..100`)
+- `toneCurvePoints` (normalized luminance point curve; endpoint anchors preserved)
 - `clarity`, `dehaze`, `vibrance`, `saturation`, `warmth`, `sharpen`, `denoise`
 
 Not persisted as preset field:
@@ -82,6 +83,7 @@ Trigger path:
 Key behavior:
 
 - Auto Fix writes a full adjustment profile, not just one/few sliders.
+- Auto Fix preserves the current photo tone-curve points (`toneCurvePoints`) in v1 behavior, then updates legacy `toneCurve` from those points.
 - Because writes are full-profile, repeated Auto Fix presses should be stable/non-stacking for a given photo and analysis snapshot.
 - Auto Fix still respects `Apply edits to all photos` if that toggle is enabled; in that mode, the selected-photo computed profile is applied to all loaded photos.
 
@@ -89,7 +91,7 @@ Key behavior:
 
 Reset button behavior:
 
-- Applies `{ ...defaultAdjustments }` (includes `toneCurve: 0`, `rotation: 0`).
+- Applies `{ ...defaultAdjustments }` (includes neutral `toneCurve: 0`, neutral `toneCurvePoints`, and `rotation: 0`).
 - Clears active top-row preset highlight.
 
 Per-photo neutral initialization:
@@ -104,12 +106,13 @@ Expected invariant:
 ## Current State Notes
 
 - Top-row adaptive presets and dropdown built-ins are intentionally separate surfaces with different semantics.
-- `toneCurve` is currently an internal adjustment field and is persisted in user presets.
+- Tone Curve is visible in the Adjustments panel as a luminance-only point curve (with reset and histogram backdrop).
+- Preset persistence includes both legacy scalar `toneCurve` and normalized `toneCurvePoints` for backward compatibility.
 - Preset indicator coupling still depends on global renderer state (`activePreset` + `selectedPresetOptionId`) and should be regression-tested on selection changes.
 
 ## QA Focus For Presets/Auto Fix
 
 - Verify repeated Auto Fix non-stacking on flat HDR and already-good image.
-- Verify Reset fully clears tone shaping (`toneCurve`) and visible controls.
+- Verify Reset fully clears tone shaping (`toneCurve` + `toneCurvePoints`) and visible controls.
 - Verify reserved-name protections (save/delete) still hold.
 - Verify dropdown built-ins stay static while top-row presets remain adaptive.

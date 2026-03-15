@@ -50,13 +50,19 @@ Notes:
 
 ## 3) Non-strict generic JPEG export naming
 
-Pattern in `export-edited-jpegs`:
+Pattern in normal renderer export flow (`Export Settings` modal scopes):
 
 ```text
 {baseName}{suffix}.jpg
 ```
 
-Default suffix:
+Current normal-flow suffix:
+
+```text
+_edited
+```
+
+IPC fallback suffix (when a caller does not pass a suffix):
 
 ```text
 _edit
@@ -65,7 +71,13 @@ _edit
 Collision fallback:
 
 ```text
-{baseName}{suffix}_{n}.jpg
+{baseName}{suffix}-{n}.jpg
+```
+
+Example collision output:
+
+```text
+DJI_0001_edited-2.jpg
 ```
 
 ## Temp and Atomic Write Rules
@@ -122,6 +134,15 @@ Merged HDR masters are validated in `merge-worker.js`:
 - Reads TIFF `BitsPerSample` tag (258).
 - Requires all channel values equal `16`.
 - Throws `HDR_OUTPUT_NOT_16BIT_TIFF` and removes invalid output if check fails.
+
+## Export Flow Notes (v1.1.0)
+
+- Normal JPG exports are initiated from top-bar `Export` -> `Export Settings`.
+- Scope choices:
+  - `Current Preview`
+  - `Current Selection`
+  - `All Loaded Photos`
+- Normal flow is output-folder based; when an output folder is set, current-preview export does not use a per-file save dialog.
 
 ## Validation Script Cross-References
 

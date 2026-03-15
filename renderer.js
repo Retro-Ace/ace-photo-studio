@@ -8,7 +8,15 @@ const autoFixModule = (typeof window !== 'undefined' && window.AceAutoFix) ? win
 const rendererStateModule = (typeof window !== 'undefined' && window.AceRendererState) ? window.AceRendererState : null;
 
 const defaultAdjustments = editorCore?.defaultAdjustments
-  ? { ...editorCore.defaultAdjustments }
+  ? {
+    ...editorCore.defaultAdjustments,
+    toneCurvePoints: editorCore?.cloneToneCurvePoints
+      ? editorCore.cloneToneCurvePoints(editorCore.defaultAdjustments?.toneCurvePoints)
+      : [
+        { x: 0, y: 0 },
+        { x: 1, y: 1 },
+      ],
+  }
   : {
     exposure: 0,
     contrast: 0,
@@ -20,6 +28,10 @@ const defaultAdjustments = editorCore?.defaultAdjustments
     whites: 0,
     blacks: 0,
     toneCurve: 0,
+    toneCurvePoints: [
+      { x: 0, y: 0 },
+      { x: 1, y: 1 },
+    ],
     clarity: 0,
     dehaze: 0,
     sharpen: 0,
@@ -157,6 +169,10 @@ const ANALYSIS_MAX_DIMENSION = 320;
 const HISTOGRAM_BIN_COUNT = 64;
 const HISTOGRAM_MAX_DIMENSION = 224;
 const HISTOGRAM_REFRESH_DELAY_MS = 90;
+const TONE_CURVE_MAX_POINTS = editorCore?.MAX_TONE_CURVE_POINTS || 8;
+const TONE_CURVE_HANDLE_RADIUS = 4;
+const TONE_CURVE_HANDLE_HIT_RADIUS = 9;
+const TONE_CURVE_MIN_X_GAP = 0.03;
 // Auto-fix calibration anchors from live references:
 // - hdr-set-2: flat/washed merged HDR should trigger stronger recovery
 // - hdr-set-5: already-good control should avoid recovery branch
@@ -172,6 +188,30 @@ if (!rendererStateModule?.createRendererState) {
 const state = rendererStateModule.createRendererState();
 
 let previewHandlersBound = false;
+const exportUiState = {
+  preferredOutputDir: null,
+  lastOutputDir: null,
+  scope: 'current-preview',
+};
+const exportResultState = {
+  outputDir: '',
+  savedCount: 0,
+  failedCount: 0,
+  savedFileName: '',
+};
+const hdrMergeResultState = {
+  status: 'Completed',
+  outputDir: '',
+  mergedCount: 0,
+  loadedCount: 0,
+  latestFileName: '',
+};
+const toneCurveUiState = {
+  expanded: true,
+  pointerId: null,
+  draggingPointIndex: null,
+  draggingDidMove: false,
+};
 
 const el = {
   startupScreen: document.getElementById('startupScreen'),
@@ -181,6 +221,8 @@ const el = {
   addPhotosBtn: document.getElementById('addPhotosBtn'),
   addFolderBtn: document.getElementById('addFolderBtn'),
   addHdrFolderBtn: document.getElementById('addHdrFolderBtn'),
+  importMenuBtn: document.getElementById('importMenuBtn'),
+  importMenu: document.getElementById('importMenu'),
   startHdrMergePanelBtn: document.getElementById('startHdrMergePanelBtn'),
   retryFailedBtn: document.getElementById('retryFailedBtn'),
   cancelHdrMergeBtn: document.getElementById('cancelHdrMergeBtn'),
@@ -198,8 +240,8 @@ const el = {
   hdrWorkflowLeftSection: document.getElementById('hdrWorkflowLeftSection'),
   libraryLeftSection: document.getElementById('libraryLeftSection'),
 
-  exportAllBtn: document.getElementById('exportAllBtn'),
   exportMergedHdrBtn: document.getElementById('exportMergedHdrBtn'),
+  exportBtn: document.getElementById('exportBtn'),
   hdrExportQuality: document.getElementById('hdrExportQuality'),
   hdrExportQualityValue: document.getElementById('hdrExportQualityValue'),
 
@@ -209,7 +251,6 @@ const el = {
   presetPunchyBtn: document.getElementById('presetPunchyBtn'),
   presetSoftBtn: document.getElementById('presetSoftBtn'),
   rotateBtn: document.getElementById('rotateBtn'),
-  saveCurrentBtn: document.getElementById('saveCurrentBtn'),
   resetBtn: document.getElementById('resetBtn'),
   copyToAllBtn: document.getElementById('copyToAllBtn'),
   applyAllToggle: document.getElementById('applyAllToggle'),
@@ -220,6 +261,36 @@ const el = {
   presetNameInput: document.getElementById('presetNameInput'),
   cancelSavePresetBtn: document.getElementById('cancelSavePresetBtn'),
   confirmSavePresetBtn: document.getElementById('confirmSavePresetBtn'),
+  exportSettingsModal: document.getElementById('exportSettingsModal'),
+  exportScopeGroup: document.getElementById('exportScopeGroup'),
+  exportScopePreviewBtn: document.getElementById('exportScopePreviewBtn'),
+  exportScopeSelectionBtn: document.getElementById('exportScopeSelectionBtn'),
+  exportScopeAllBtn: document.getElementById('exportScopeAllBtn'),
+  cancelExportSettingsBtn: document.getElementById('cancelExportSettingsBtn'),
+  confirmExportFromSettingsBtn: document.getElementById('confirmExportFromSettingsBtn'),
+  setExportOutputFolderBtn: document.getElementById('setExportOutputFolderBtn'),
+  clearExportOutputFolderBtn: document.getElementById('clearExportOutputFolderBtn'),
+  openExportOutputFolderBtn: document.getElementById('openExportOutputFolderBtn'),
+  exportOutputFolderValue: document.getElementById('exportOutputFolderValue'),
+  exportResultModal: document.getElementById('exportResultModal'),
+  exportResultSummaryText: document.getElementById('exportResultSummaryText'),
+  exportResultSavedCount: document.getElementById('exportResultSavedCount'),
+  exportResultFailedCount: document.getElementById('exportResultFailedCount'),
+  exportResultOutputFolder: document.getElementById('exportResultOutputFolder'),
+  exportResultFileRow: document.getElementById('exportResultFileRow'),
+  exportResultSavedFileName: document.getElementById('exportResultSavedFileName'),
+  exportResultRevealBtn: document.getElementById('exportResultRevealBtn'),
+  closeExportResultBtn: document.getElementById('closeExportResultBtn'),
+  hdrMergeResultModal: document.getElementById('hdrMergeResultModal'),
+  hdrMergeResultModalTitle: document.getElementById('hdrMergeResultModalTitle'),
+  hdrMergeResultSummaryText: document.getElementById('hdrMergeResultSummaryText'),
+  hdrMergeResultMergedCount: document.getElementById('hdrMergeResultMergedCount'),
+  hdrMergeResultLoadedCount: document.getElementById('hdrMergeResultLoadedCount'),
+  hdrMergeResultOutputFolder: document.getElementById('hdrMergeResultOutputFolder'),
+  hdrMergeResultLatestFileRow: document.getElementById('hdrMergeResultLatestFileRow'),
+  hdrMergeResultLatestFileName: document.getElementById('hdrMergeResultLatestFileName'),
+  hdrMergeResultRevealBtn: document.getElementById('hdrMergeResultRevealBtn'),
+  closeHdrMergeResultBtn: document.getElementById('closeHdrMergeResultBtn'),
 
   dropzone: document.getElementById('dropzone'),
   dropOverlay: document.getElementById('dropOverlay'),
@@ -227,6 +298,10 @@ const el = {
   photoCount: document.getElementById('photoCount'),
   previewArea: document.getElementById('previewArea'),
   histogramCanvas: document.getElementById('histogramCanvas'),
+  toneCurveSectionToggleBtn: document.getElementById('toneCurveSectionToggleBtn'),
+  toneCurveSectionBody: document.getElementById('toneCurveSectionBody'),
+  toneCurveResetBtn: document.getElementById('toneCurveResetBtn'),
+  toneCurveCanvas: document.getElementById('toneCurveCanvas'),
   controls: document.getElementById('controls'),
 
   zoomInBtn: document.getElementById('zoomInBtn'),
@@ -293,6 +368,119 @@ function pathBasenameWithoutExt(filePath) {
   const index = base.lastIndexOf('.');
   if (index <= 0) return base;
   return base.slice(0, index);
+}
+
+function createNeutralToneCurvePoints() {
+  if (editorCore?.createNeutralToneCurvePoints) {
+    return editorCore.createNeutralToneCurvePoints();
+  }
+  return [
+    { x: 0, y: 0 },
+    { x: 1, y: 1 },
+  ];
+}
+
+function normalizeToneCurvePoints(points) {
+  if (editorCore?.normalizeToneCurvePoints) {
+    return editorCore.normalizeToneCurvePoints(points, { maxPoints: TONE_CURVE_MAX_POINTS });
+  }
+
+  const source = Array.isArray(points) ? points : [];
+  const parsed = source
+    .map((entry) => {
+      if (Array.isArray(entry)) {
+        return { x: Number(entry[0]), y: Number(entry[1]) };
+      }
+      return {
+        x: Number(entry?.x),
+        y: Number(entry?.y),
+      };
+    })
+    .filter((entry) => Number.isFinite(entry.x) && Number.isFinite(entry.y))
+    .map((entry) => ({
+      x: Math.round(clamp(entry.x, 0, 1) * 1000) / 1000,
+      y: Math.round(clamp(entry.y, 0, 1) * 1000) / 1000,
+    }))
+    .filter((entry) => entry.x > 0 && entry.x < 1)
+    .sort((a, b) => (a.x - b.x) || (a.y - b.y));
+  const deduped = [];
+  for (const entry of parsed) {
+    const previous = deduped[deduped.length - 1];
+    if (previous && Math.abs(previous.x - entry.x) < 0.0005) {
+      deduped[deduped.length - 1] = entry;
+    } else {
+      deduped.push(entry);
+    }
+  }
+  const maxInternal = Math.max(0, TONE_CURVE_MAX_POINTS - 2);
+  return [
+    { x: 0, y: 0 },
+    ...deduped.slice(0, maxInternal),
+    { x: 1, y: 1 },
+  ];
+}
+
+function cloneToneCurvePoints(points) {
+  if (editorCore?.cloneToneCurvePoints) {
+    return editorCore.cloneToneCurvePoints(points);
+  }
+  return normalizeToneCurvePoints(points).map((point) => ({ x: point.x, y: point.y }));
+}
+
+function isNeutralToneCurvePoints(points) {
+  if (editorCore?.isNeutralToneCurvePoints) {
+    return editorCore.isNeutralToneCurvePoints(points);
+  }
+  const normalized = normalizeToneCurvePoints(points);
+  return normalized.length === 2
+    && normalized[0].x === 0
+    && normalized[0].y === 0
+    && normalized[1].x === 1
+    && normalized[1].y === 1;
+}
+
+function toneCurvePointsFromLegacyStrength(strengthRaw) {
+  if (editorCore?.toneCurvePointsFromLegacyStrength) {
+    return editorCore.toneCurvePointsFromLegacyStrength(strengthRaw);
+  }
+  const strength = clamp(Number(strengthRaw) || 0, 0, 100) / 100;
+  if (strength <= 0.0001) return createNeutralToneCurvePoints();
+  const lift = 0.033 * strength;
+  return normalizeToneCurvePoints([
+    { x: 0, y: 0 },
+    { x: 0.25, y: clamp(0.25 - lift, 0, 1) },
+    { x: 0.75, y: clamp(0.75 + lift, 0, 1) },
+    { x: 1, y: 1 },
+  ]);
+}
+
+function sampleToneCurveLinear(points, xRaw) {
+  const x = clamp(Number(xRaw) || 0, 0, 1);
+  const normalized = normalizeToneCurvePoints(points);
+  if (x <= 0) return 0;
+  if (x >= 1) return 1;
+
+  for (let i = 0; i < normalized.length - 1; i += 1) {
+    const left = normalized[i];
+    const right = normalized[i + 1];
+    if (x < left.x || x > right.x) continue;
+    const span = Math.max(0.000001, right.x - left.x);
+    const t = (x - left.x) / span;
+    return clamp(left.y + (right.y - left.y) * t, 0, 1);
+  }
+  return x;
+}
+
+function estimateLegacyToneCurveStrengthFromPoints(points) {
+  if (editorCore?.estimateLegacyToneCurveStrengthFromPoints) {
+    return editorCore.estimateLegacyToneCurveStrengthFromPoints(points);
+  }
+  const normalized = normalizeToneCurvePoints(points);
+  if (isNeutralToneCurvePoints(normalized)) return 0;
+  const low = sampleToneCurveLinear(normalized, 0.25);
+  const high = sampleToneCurveLinear(normalized, 0.75);
+  const offset = Math.max(0, ((0.25 - low) + (high - 0.75)) * 0.5);
+  return clamp(Math.round((offset / 0.033) * 100), 0, 100);
 }
 
 function compactPathPreview(filePath, { folder = false } = {}) {
@@ -372,27 +560,361 @@ function parentName(filePath) {
   return pathBasename(dir) || 'Folder';
 }
 
-function makeOutputName(filePath) {
-  return `${pathBasenameWithoutExt(filePath)}-cleaned.jpg`;
-}
-
 function lastMergedResult(queue) {
   const results = Array.isArray(queue?.mergedResults) ? queue.mergedResults : [];
   return results.length ? results[results.length - 1] : null;
 }
 
+function resolveExportQuality() {
+  return clamp(Number(el.hdrExportQuality?.value || 92), 1, 100);
+}
+
+function normalizeExportScope(scope) {
+  if (scope === 'current-selection') return 'current-selection';
+  if (scope === 'all-loaded') return 'all-loaded';
+  return 'current-preview';
+}
+
+function activeExportOutputFolder() {
+  return exportUiState.preferredOutputDir || exportUiState.lastOutputDir || null;
+}
+
+function exportScopePhotos(scope = exportUiState.scope) {
+  const resolvedScope = normalizeExportScope(scope);
+  if (resolvedScope === 'all-loaded') {
+    return [...state.photos];
+  }
+  if (resolvedScope === 'current-selection') {
+    const selected = selectedLibraryPhotos();
+    return selected.length ? selected : (selectedPhoto() ? [selectedPhoto()] : []);
+  }
+  const previewPhoto = selectedPhoto();
+  return previewPhoto ? [previewPhoto] : [];
+}
+
+function setExportScope(scope) {
+  exportUiState.scope = normalizeExportScope(scope);
+  syncExportSettingsUi();
+}
+
+function syncExportSettingsUi() {
+  const activeOutputFolder = activeExportOutputFolder();
+  if (el.exportOutputFolderValue) {
+    el.exportOutputFolderValue.textContent = activeOutputFolder || 'Choose on each export';
+    el.exportOutputFolderValue.title = activeOutputFolder || '';
+  }
+
+  const scope = normalizeExportScope(exportUiState.scope);
+  const scopeButtons = [
+    el.exportScopePreviewBtn,
+    el.exportScopeSelectionBtn,
+    el.exportScopeAllBtn,
+  ];
+  for (const button of scopeButtons) {
+    if (!button) continue;
+    const buttonScope = normalizeExportScope(String(button.dataset.exportScope || ''));
+    const isActive = buttonScope === scope;
+    button.classList.toggle('is-active', isActive);
+    button.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+  }
+
+  if (el.confirmExportFromSettingsBtn) {
+    el.confirmExportFromSettingsBtn.disabled = exportScopePhotos(scope).length <= 0;
+  }
+
+  if (el.clearExportOutputFolderBtn) {
+    el.clearExportOutputFolderBtn.disabled = !activeOutputFolder;
+  }
+  if (el.openExportOutputFolderBtn) {
+    el.openExportOutputFolderBtn.disabled = !activeOutputFolder;
+  }
+
+  if (el.hdrExportQualityValue && el.hdrExportQuality) {
+    el.hdrExportQualityValue.textContent = String(el.hdrExportQuality.value);
+  }
+}
+
+function isCommandMenuOpen(triggerEl, menuEl) {
+  return Boolean(triggerEl && menuEl && triggerEl.getAttribute('aria-expanded') === 'true' && !menuEl.classList.contains('hidden'));
+}
+
+function closeCommandMenu(triggerEl, menuEl) {
+  if (!triggerEl || !menuEl) return;
+  triggerEl.setAttribute('aria-expanded', 'false');
+  menuEl.classList.add('hidden');
+}
+
+function closeTopbarCommandMenus({ except = null } = {}) {
+  if (el.importMenu !== except) {
+    closeCommandMenu(el.importMenuBtn, el.importMenu);
+  }
+}
+
+function openCommandMenu(triggerEl, menuEl) {
+  if (!triggerEl || !menuEl) return;
+  if (triggerEl.disabled) return;
+  closeExportSettingsModal();
+  closeExportResultModal();
+  closeHdrMergeResultModal();
+  closePresetDropdown();
+  closeTopbarCommandMenus({ except: menuEl });
+  triggerEl.setAttribute('aria-expanded', 'true');
+  menuEl.classList.remove('hidden');
+}
+
+function toggleImportMenu() {
+  if (isCommandMenuOpen(el.importMenuBtn, el.importMenu)) {
+    closeCommandMenu(el.importMenuBtn, el.importMenu);
+    return;
+  }
+  openCommandMenu(el.importMenuBtn, el.importMenu);
+}
+
+function isExportSettingsModalOpen() {
+  return Boolean(el.exportSettingsModal && !el.exportSettingsModal.classList.contains('hidden'));
+}
+
+function isExportResultModalOpen() {
+  return Boolean(el.exportResultModal && !el.exportResultModal.classList.contains('hidden'));
+}
+
+function syncExportResultModalUi() {
+  if (el.exportResultSummaryText) {
+    if (exportResultState.failedCount > 0) {
+      el.exportResultSummaryText.textContent = 'Export finished with some failures.';
+    } else {
+      el.exportResultSummaryText.textContent = 'Your export completed successfully.';
+    }
+  }
+  if (el.exportResultSavedCount) {
+    el.exportResultSavedCount.textContent = String(Math.max(0, Number(exportResultState.savedCount) || 0));
+  }
+  if (el.exportResultFailedCount) {
+    el.exportResultFailedCount.textContent = String(Math.max(0, Number(exportResultState.failedCount) || 0));
+  }
+  if (el.exportResultOutputFolder) {
+    el.exportResultOutputFolder.textContent = exportResultState.outputDir || 'Not available';
+    el.exportResultOutputFolder.title = exportResultState.outputDir || '';
+  }
+  if (el.exportResultFileRow) {
+    el.exportResultFileRow.classList.toggle('hidden', !exportResultState.savedFileName);
+  }
+  if (el.exportResultSavedFileName) {
+    el.exportResultSavedFileName.textContent = exportResultState.savedFileName || '';
+    el.exportResultSavedFileName.title = exportResultState.savedFileName || '';
+  }
+  if (el.exportResultRevealBtn) {
+    el.exportResultRevealBtn.disabled = !exportResultState.outputDir;
+  }
+}
+
+function openExportResultModal({
+  outputDir = '',
+  savedCount = 0,
+  failedCount = 0,
+  savedFileName = '',
+} = {}) {
+  if (!el.exportResultModal) return;
+  closeHdrMergeResultModal();
+  exportResultState.outputDir = outputDir || '';
+  exportResultState.savedCount = Math.max(0, Number(savedCount) || 0);
+  exportResultState.failedCount = Math.max(0, Number(failedCount) || 0);
+  exportResultState.savedFileName = String(savedFileName || '');
+  syncExportResultModalUi();
+  el.exportResultModal.classList.remove('hidden');
+  el.exportResultModal.setAttribute('aria-hidden', 'false');
+}
+
+function closeExportResultModal() {
+  if (!el.exportResultModal) return;
+  el.exportResultModal.classList.add('hidden');
+  el.exportResultModal.setAttribute('aria-hidden', 'true');
+}
+
+function isHdrMergeResultModalOpen() {
+  return Boolean(el.hdrMergeResultModal && !el.hdrMergeResultModal.classList.contains('hidden'));
+}
+
+function syncHdrMergeResultModalUi() {
+  const status = String(hdrMergeResultState.status || 'Completed');
+  const normalizedStatus = ['Completed', 'Canceled', 'Failed'].includes(status) ? status : 'Completed';
+  const title = normalizedStatus === 'Completed' ? 'HDR Merge Complete' : 'HDR Merge Finished';
+
+  if (el.hdrMergeResultModalTitle) {
+    el.hdrMergeResultModalTitle.textContent = title;
+  }
+  if (el.hdrMergeResultSummaryText) {
+    if (normalizedStatus === 'Completed') {
+      el.hdrMergeResultSummaryText.textContent = 'Merged TIFFs were created and loaded into your Library.';
+    } else if (normalizedStatus === 'Canceled') {
+      el.hdrMergeResultSummaryText.textContent = 'Merge queue stopped early. Completed TIFFs were still loaded into your Library.';
+    } else {
+      el.hdrMergeResultSummaryText.textContent = 'Merge queue finished with failures. Completed TIFFs were still loaded into your Library.';
+    }
+  }
+  if (el.hdrMergeResultMergedCount) {
+    el.hdrMergeResultMergedCount.textContent = String(Math.max(0, Number(hdrMergeResultState.mergedCount) || 0));
+  }
+  if (el.hdrMergeResultLoadedCount) {
+    el.hdrMergeResultLoadedCount.textContent = String(Math.max(0, Number(hdrMergeResultState.loadedCount) || 0));
+  }
+  if (el.hdrMergeResultOutputFolder) {
+    const compact = compactPathPreview(hdrMergeResultState.outputDir, { folder: true });
+    el.hdrMergeResultOutputFolder.textContent = compact || 'Not available';
+    el.hdrMergeResultOutputFolder.title = hdrMergeResultState.outputDir || '';
+  }
+  if (el.hdrMergeResultLatestFileRow) {
+    el.hdrMergeResultLatestFileRow.classList.toggle('hidden', !hdrMergeResultState.latestFileName);
+  }
+  if (el.hdrMergeResultLatestFileName) {
+    el.hdrMergeResultLatestFileName.textContent = hdrMergeResultState.latestFileName || '';
+    el.hdrMergeResultLatestFileName.title = hdrMergeResultState.latestFileName || '';
+  }
+  if (el.hdrMergeResultRevealBtn) {
+    el.hdrMergeResultRevealBtn.disabled = !hdrMergeResultState.outputDir;
+  }
+}
+
+function openHdrMergeResultModal({
+  status = 'Completed',
+  outputDir = '',
+  mergedCount = 0,
+  loadedCount = 0,
+  latestFileName = '',
+} = {}) {
+  if (!el.hdrMergeResultModal) return;
+  closeExportResultModal();
+  hdrMergeResultState.status = status;
+  hdrMergeResultState.outputDir = outputDir || '';
+  hdrMergeResultState.mergedCount = Math.max(0, Number(mergedCount) || 0);
+  hdrMergeResultState.loadedCount = Math.max(0, Number(loadedCount) || 0);
+  hdrMergeResultState.latestFileName = String(latestFileName || '');
+  syncHdrMergeResultModalUi();
+  el.hdrMergeResultModal.classList.remove('hidden');
+  el.hdrMergeResultModal.setAttribute('aria-hidden', 'false');
+}
+
+function closeHdrMergeResultModal() {
+  if (!el.hdrMergeResultModal) return;
+  el.hdrMergeResultModal.classList.add('hidden');
+  el.hdrMergeResultModal.setAttribute('aria-hidden', 'true');
+}
+
+function openExportSettingsModal() {
+  if (!el.exportSettingsModal) return;
+  closeExportResultModal();
+  closeHdrMergeResultModal();
+  closeTopbarCommandMenus();
+  closePresetDropdown();
+  syncExportSettingsUi();
+  el.exportSettingsModal.classList.remove('hidden');
+  el.exportSettingsModal.setAttribute('aria-hidden', 'false');
+}
+
+function closeExportSettingsModal() {
+  if (!el.exportSettingsModal) return;
+  el.exportSettingsModal.classList.add('hidden');
+  el.exportSettingsModal.setAttribute('aria-hidden', 'true');
+}
+
+async function pickExportOutputFolderFlow() {
+  try {
+    if (!window.aceApi?.pickOutputFolder) {
+      alert('Export output folder picker is unavailable.');
+      return null;
+    }
+    const outputDir = await window.aceApi.pickOutputFolder();
+    if (!outputDir) return null;
+    exportUiState.preferredOutputDir = outputDir;
+    exportUiState.lastOutputDir = outputDir;
+    syncExportSettingsUi();
+    return outputDir;
+  } catch (error) {
+    console.error(error);
+    alert(`Could not choose export output folder.\n\n${error.message || error}`);
+    return null;
+  }
+}
+
+function clearExportOutputFolderFlow() {
+  exportUiState.preferredOutputDir = null;
+  exportUiState.lastOutputDir = null;
+  syncExportSettingsUi();
+}
+
+async function revealExportOutputFolderFlow(targetPath = activeExportOutputFolder()) {
+  try {
+    if (!targetPath) {
+      alert('No export output folder is set yet. Use Export Settings or run Export All first.');
+      return;
+    }
+
+    const response = await window.aceApi.openPathInFinder(targetPath);
+    if (!response?.ok) {
+      throw new Error(response?.error || 'Could not open export output folder.');
+    }
+  } catch (error) {
+    console.error(error);
+    alert(`Could not open export output folder.\n\n${error.message || error}`);
+  }
+}
+
+async function resolveOutputFolderForNormalExport() {
+  const existing = activeExportOutputFolder();
+  if (existing) return existing;
+  await pickExportOutputFolderFlow();
+  return activeExportOutputFolder();
+}
+
 function mergedHdrBaseAdjustments() {
-  return { ...defaultAdjustments };
+  return cloneAdjustments(defaultAdjustments);
 }
 
 function resolveRenderAdjustments(adjustments = null) {
   if (editorCore?.resolveRenderAdjustments) {
     return editorCore.resolveRenderAdjustments(adjustments, defaultAdjustments);
   }
-  return {
+  const merged = {
     ...defaultAdjustments,
     ...(adjustments || {}),
   };
+  const toneCurveRaw = Number(merged.toneCurve);
+  merged.toneCurve = Number.isFinite(toneCurveRaw) ? clamp(Math.round(toneCurveRaw), 0, 100) : 0;
+  const hasExplicitCurvePoints = adjustments
+    && Object.prototype.hasOwnProperty.call(adjustments, 'toneCurvePoints');
+  merged.toneCurvePoints = hasExplicitCurvePoints
+    ? normalizeToneCurvePoints(adjustments.toneCurvePoints)
+    : toneCurvePointsFromLegacyStrength(merged.toneCurve);
+  return merged;
+}
+
+function cloneAdjustments(adjustments = null) {
+  const resolved = resolveRenderAdjustments(adjustments);
+  return {
+    ...resolved,
+    toneCurvePoints: cloneToneCurvePoints(resolved.toneCurvePoints),
+  };
+}
+
+function normalizeAdjustmentUpdates(updates = {}) {
+  const out = { ...(updates || {}) };
+  const hasToneCurve = Object.prototype.hasOwnProperty.call(out, 'toneCurve');
+  const hasToneCurvePoints = Object.prototype.hasOwnProperty.call(out, 'toneCurvePoints');
+
+  if (hasToneCurve) {
+    out.toneCurve = clamp(Math.round(Number(out.toneCurve) || 0), 0, 100);
+  }
+
+  if (hasToneCurvePoints) {
+    out.toneCurvePoints = normalizeToneCurvePoints(out.toneCurvePoints);
+    if (!hasToneCurve) {
+      out.toneCurve = estimateLegacyToneCurveStrengthFromPoints(out.toneCurvePoints);
+    }
+  } else if (hasToneCurve) {
+    out.toneCurvePoints = toneCurvePointsFromLegacyStrength(out.toneCurve);
+  }
+
+  return out;
 }
 
 function photoPreviewUrl(photo) {
@@ -452,12 +974,13 @@ function updateSelectedThumbImage() {
 function updateLivePreviewImageSources(photo) {
   if (!photo) return false;
   const nextSrc = photoPreviewUrl(photo);
-  const cleanedNodes = Array.from(document.querySelectorAll('.preview-image[alt="Cleaned"], .compare-cleaned-image'));
+  const cleanedNodes = Array.from(document.querySelectorAll('[data-preview-role="cleaned"]'));
   if (!cleanedNodes.length) return false;
 
   cleanedNodes.forEach((node) => {
     node.src = nextSrc;
   });
+  syncPreviewImagePresentation(photo);
 
   return true;
 }
@@ -761,16 +1284,67 @@ function makePreviewTransform() {
   return `translate(calc(-50% + ${state.panX}px), calc(-50% + ${state.panY}px)) scale(${state.zoom})`;
 }
 
-function previewImageSizeStyle(photo) {
+function normalizedPhotoRotation(photo) {
+  return ((photo?.adjustments?.rotation || 0) % 360 + 360) % 360;
+}
+
+function previewImageDimensions(photo, { role = 'cleaned' } = {}) {
   const sourceImage = photo?.sourceImage;
-  if (!sourceImage?.width || !sourceImage?.height) return '';
+  if (!sourceImage?.width || !sourceImage?.height) return null;
 
-  const rotation = ((photo?.adjustments?.rotation || 0) % 360 + 360) % 360;
+  const rotation = normalizedPhotoRotation(photo);
   const rotate90 = rotation === 90 || rotation === 270;
-  const width = rotate90 ? sourceImage.height : sourceImage.width;
-  const height = rotate90 ? sourceImage.width : sourceImage.height;
+  const isOriginalCompare = role === 'original-compare';
+  const width = isOriginalCompare
+    ? sourceImage.width
+    : (rotate90 ? sourceImage.height : sourceImage.width);
+  const height = isOriginalCompare
+    ? sourceImage.height
+    : (rotate90 ? sourceImage.width : sourceImage.height);
 
-  return `width:${Math.max(1, Math.round(width))}px;height:${Math.max(1, Math.round(height))}px;`;
+  return {
+    width: Math.max(1, Math.round(width)),
+    height: Math.max(1, Math.round(height)),
+  };
+}
+
+function previewImageSizeStyle(photo, options = {}) {
+  const dims = previewImageDimensions(photo, options);
+  if (!dims) return '';
+  return `width:${dims.width}px;height:${dims.height}px;`;
+}
+
+function previewNodeTransform(photo, { role = 'cleaned' } = {}) {
+  const base = makePreviewTransform();
+  if (role !== 'original-compare') return base;
+  const rotation = normalizedPhotoRotation(photo);
+  if (!rotation) return base;
+  return `${base} rotate(${rotation}deg)`;
+}
+
+function syncPreviewImagePresentation(photo = selectedPhoto()) {
+  if (!photo) return;
+
+  const cleanedDims = previewImageDimensions(photo, { role: 'cleaned' });
+  const originalDims = previewImageDimensions(photo, { role: 'original-compare' });
+  const cleanedTransform = previewNodeTransform(photo, { role: 'cleaned' });
+  const originalTransform = previewNodeTransform(photo, { role: 'original-compare' });
+
+  document.querySelectorAll('[data-preview-role="cleaned"]').forEach((img) => {
+    if (cleanedDims) {
+      img.style.width = `${cleanedDims.width}px`;
+      img.style.height = `${cleanedDims.height}px`;
+    }
+    img.style.transform = cleanedTransform;
+  });
+
+  document.querySelectorAll('[data-preview-role="original-compare"]').forEach((img) => {
+    if (originalDims) {
+      img.style.width = `${originalDims.width}px`;
+      img.style.height = `${originalDims.height}px`;
+    }
+    img.style.transform = originalTransform;
+  });
 }
 
 function histogramSourceKeyForPhoto(photo) {
@@ -781,6 +1355,7 @@ function histogramSourceKeyForPhoto(photo) {
 function drawHistogramBins(bins = null) {
   if (!el.histogramCanvas || !histogramModule?.drawHistogramBins) return;
   histogramModule.drawHistogramBins(el.histogramCanvas, bins);
+  renderToneCurveGraph();
 }
 
 function buildLuminanceHistogramFromImage(image, binCount = HISTOGRAM_BIN_COUNT) {
@@ -857,6 +1432,431 @@ function scheduleHistogramRefresh({ force = false, delayMs = HISTOGRAM_REFRESH_D
   }, Math.max(0, delayMs));
 }
 
+function setToneCurveSectionExpanded(expanded) {
+  toneCurveUiState.expanded = Boolean(expanded);
+  if (el.toneCurveSectionToggleBtn) {
+    el.toneCurveSectionToggleBtn.setAttribute('aria-expanded', toneCurveUiState.expanded ? 'true' : 'false');
+  }
+  if (el.toneCurveSectionBody) {
+    el.toneCurveSectionBody.classList.toggle('hidden', !toneCurveUiState.expanded);
+  }
+  if (toneCurveUiState.expanded) {
+    renderToneCurveGraph();
+  }
+}
+
+function toneCurveCanvasMetrics() {
+  if (!el.toneCurveCanvas) return null;
+  const ctx = el.toneCurveCanvas.getContext('2d');
+  if (!ctx) return null;
+
+  const size = histogramModule?.resizeHistogramCanvas
+    ? histogramModule.resizeHistogramCanvas(el.toneCurveCanvas)
+    : {
+      width: Math.max(1, el.toneCurveCanvas.width || 1),
+      height: Math.max(1, el.toneCurveCanvas.height || 1),
+    };
+  const width = Math.max(1, size.width);
+  const height = Math.max(1, size.height);
+  const paddingLeft = 10;
+  const paddingRight = 10;
+  const paddingTop = 10;
+  const paddingBottom = 10;
+  const plotWidth = Math.max(1, width - paddingLeft - paddingRight);
+  const plotHeight = Math.max(1, height - paddingTop - paddingBottom);
+
+  return {
+    ctx,
+    width,
+    height,
+    paddingLeft,
+    paddingRight,
+    paddingTop,
+    paddingBottom,
+    plotWidth,
+    plotHeight,
+    plotRight: paddingLeft + plotWidth,
+    plotBottom: paddingTop + plotHeight,
+  };
+}
+
+function toneCurvePointToCanvas(point, metrics) {
+  return {
+    x: metrics.paddingLeft + clamp(point.x, 0, 1) * metrics.plotWidth,
+    y: metrics.paddingTop + (1 - clamp(point.y, 0, 1)) * metrics.plotHeight,
+  };
+}
+
+function canvasToToneCurvePoint(canvasX, canvasY, metrics) {
+  const x = (canvasX - metrics.paddingLeft) / Math.max(1, metrics.plotWidth);
+  const y = 1 - ((canvasY - metrics.paddingTop) / Math.max(1, metrics.plotHeight));
+  return {
+    x: clamp(x, 0, 1),
+    y: clamp(y, 0, 1),
+  };
+}
+
+function sampleToneCurveAtX(points, xRaw) {
+  const x = clamp(xRaw, 0, 1);
+  const normalized = normalizeToneCurvePoints(points);
+  if (x <= 0) return 0;
+  if (x >= 1) return 1;
+
+  for (let i = 0; i < normalized.length - 1; i += 1) {
+    const left = normalized[i];
+    const right = normalized[i + 1];
+    if (x < left.x || x > right.x) continue;
+    const span = Math.max(0.000001, right.x - left.x);
+    const t = (x - left.x) / span;
+    return clamp(left.y + (right.y - left.y) * t, 0, 1);
+  }
+
+  return x;
+}
+
+function buildToneCurveLut(points, sampleCount = 256) {
+  const normalized = normalizeToneCurvePoints(points);
+  const count = Math.max(16, Math.round(sampleCount || 256));
+  const lut = new Float32Array(count);
+  if (!normalized.length) return lut;
+
+  const n = normalized.length;
+  const xs = new Array(n);
+  const ys = new Array(n);
+  for (let i = 0; i < n; i += 1) {
+    xs[i] = normalized[i].x;
+    ys[i] = normalized[i].y;
+  }
+
+  const deltas = new Array(Math.max(1, n - 1)).fill(0);
+  const slopes = new Array(n).fill(0);
+  for (let i = 0; i < n - 1; i += 1) {
+    const span = Math.max(0.000001, xs[i + 1] - xs[i]);
+    deltas[i] = (ys[i + 1] - ys[i]) / span;
+  }
+  slopes[0] = deltas[0];
+  slopes[n - 1] = deltas[n - 2] || deltas[0];
+  for (let i = 1; i < n - 1; i += 1) {
+    if (deltas[i - 1] * deltas[i] <= 0) {
+      slopes[i] = 0;
+    } else {
+      slopes[i] = (deltas[i - 1] + deltas[i]) / 2;
+    }
+  }
+  for (let i = 0; i < n - 1; i += 1) {
+    const delta = deltas[i];
+    if (Math.abs(delta) <= 0.0000001) {
+      slopes[i] = 0;
+      slopes[i + 1] = 0;
+      continue;
+    }
+    const a = slopes[i] / delta;
+    const b = slopes[i + 1] / delta;
+    const sum = a * a + b * b;
+    if (sum > 9) {
+      const factor = 3 / Math.sqrt(sum);
+      slopes[i] = factor * a * delta;
+      slopes[i + 1] = factor * b * delta;
+    }
+  }
+
+  let segment = 0;
+  for (let i = 0; i < count; i += 1) {
+    const x = i / (count - 1);
+    while (segment < n - 2 && x > xs[segment + 1]) {
+      segment += 1;
+    }
+    const x0 = xs[segment];
+    const x1 = xs[segment + 1];
+    const y0 = ys[segment];
+    const y1 = ys[segment + 1];
+    const m0 = slopes[segment];
+    const m1 = slopes[segment + 1];
+    const span = Math.max(0.000001, x1 - x0);
+    const t = clamp((x - x0) / span, 0, 1);
+    const t2 = t * t;
+    const t3 = t2 * t;
+    const h00 = (2 * t3) - (3 * t2) + 1;
+    const h10 = t3 - (2 * t2) + t;
+    const h01 = (-2 * t3) + (3 * t2);
+    const h11 = t3 - t2;
+    lut[i] = clamp(h00 * y0 + h10 * span * m0 + h01 * y1 + h11 * span * m1, 0, 1);
+  }
+
+  return lut;
+}
+
+function toneCurvePointsForPhoto(photo) {
+  if (!photo) return createNeutralToneCurvePoints();
+  const resolved = resolveRenderAdjustments(photo.adjustments);
+  return cloneToneCurvePoints(resolved.toneCurvePoints);
+}
+
+function drawToneCurveHistogramBackdrop(ctx, bins, metrics) {
+  if (!Array.isArray(bins) || bins.length < 2) return;
+  const maxBin = Math.max(1, ...bins);
+  const fill = ctx.createLinearGradient(0, metrics.paddingTop, 0, metrics.plotBottom);
+  fill.addColorStop(0, 'rgba(172, 194, 236, 0.22)');
+  fill.addColorStop(1, 'rgba(88, 108, 142, 0.04)');
+
+  ctx.beginPath();
+  for (let i = 0; i < bins.length; i += 1) {
+    const x = metrics.paddingLeft + (i / (bins.length - 1)) * metrics.plotWidth;
+    const yNorm = clamp(bins[i] / maxBin, 0, 1);
+    const y = metrics.paddingTop + (1 - yNorm) * metrics.plotHeight;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.lineTo(metrics.plotRight, metrics.plotBottom);
+  ctx.lineTo(metrics.paddingLeft, metrics.plotBottom);
+  ctx.closePath();
+  ctx.fillStyle = fill;
+  ctx.fill();
+}
+
+function renderToneCurveGraph() {
+  if (!el.toneCurveCanvas || !toneCurveUiState.expanded) return;
+  const metrics = toneCurveCanvasMetrics();
+  if (!metrics) return;
+
+  const {
+    ctx,
+    width,
+    height,
+    paddingLeft,
+    paddingTop,
+    plotWidth,
+    plotHeight,
+    plotRight,
+    plotBottom,
+  } = metrics;
+
+  const photo = selectedPhoto();
+  const points = toneCurvePointsForPhoto(photo);
+
+  const bg = ctx.createLinearGradient(0, 0, 0, height);
+  bg.addColorStop(0, 'rgba(20, 27, 37, 0.97)');
+  bg.addColorStop(1, 'rgba(10, 14, 22, 0.98)');
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, width, height);
+
+  ctx.strokeStyle = 'rgba(152, 170, 206, 0.16)';
+  ctx.lineWidth = 1;
+  for (let i = 1; i < 4; i += 1) {
+    const x = paddingLeft + (i / 4) * plotWidth;
+    const y = paddingTop + (i / 4) * plotHeight;
+    ctx.beginPath();
+    ctx.moveTo(x + 0.5, paddingTop);
+    ctx.lineTo(x + 0.5, plotBottom);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(paddingLeft, y + 0.5);
+    ctx.lineTo(plotRight, y + 0.5);
+    ctx.stroke();
+  }
+
+  if (photo?.histogramBins) {
+    drawToneCurveHistogramBackdrop(ctx, photo.histogramBins, metrics);
+  }
+
+  ctx.beginPath();
+  ctx.moveTo(paddingLeft, plotBottom);
+  ctx.lineTo(plotRight, paddingTop);
+  ctx.strokeStyle = 'rgba(176, 187, 207, 0.32)';
+  ctx.lineWidth = 1.1;
+  ctx.stroke();
+
+  const lut = buildToneCurveLut(points, 256);
+  ctx.beginPath();
+  for (let i = 0; i < lut.length; i += 1) {
+    const x = i / (lut.length - 1);
+    const y = lut[i];
+    const canvasX = paddingLeft + x * plotWidth;
+    const canvasY = paddingTop + (1 - y) * plotHeight;
+    if (i === 0) ctx.moveTo(canvasX, canvasY);
+    else ctx.lineTo(canvasX, canvasY);
+  }
+  ctx.strokeStyle = 'rgba(240, 247, 255, 0.96)';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  points.forEach((point, index) => {
+    const canvasPoint = toneCurvePointToCanvas(point, metrics);
+    const movable = index > 0 && index < points.length - 1;
+    ctx.beginPath();
+    ctx.arc(canvasPoint.x, canvasPoint.y, TONE_CURVE_HANDLE_RADIUS, 0, Math.PI * 2);
+    ctx.fillStyle = movable ? 'rgba(242, 248, 255, 0.96)' : 'rgba(180, 191, 211, 0.66)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(17, 24, 34, 0.96)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  });
+
+  if (!photo) {
+    ctx.fillStyle = 'rgba(163, 174, 194, 0.85)';
+    ctx.font = `${Math.max(11, Math.round(height * 0.08))}px "SF Pro Display", "Segoe UI", sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('Load a photo to edit tone curve', width / 2, height / 2);
+  }
+
+  if (el.toneCurveResetBtn) {
+    el.toneCurveResetBtn.disabled = !photo || isNeutralToneCurvePoints(points);
+  }
+}
+
+function toneCurveCanvasPositionFromEvent(event, metrics) {
+  const rect = el.toneCurveCanvas?.getBoundingClientRect();
+  if (!rect || !metrics) return null;
+  const x = ((event.clientX - rect.left) / Math.max(1, rect.width)) * metrics.width;
+  const y = ((event.clientY - rect.top) / Math.max(1, rect.height)) * metrics.height;
+  return { x, y };
+}
+
+function findToneCurvePointIndexAtPosition(points, position, metrics) {
+  let bestIndex = -1;
+  let bestDistance = TONE_CURVE_HANDLE_HIT_RADIUS;
+  for (let i = 0; i < points.length; i += 1) {
+    const canvasPoint = toneCurvePointToCanvas(points[i], metrics);
+    const dx = canvasPoint.x - position.x;
+    const dy = canvasPoint.y - position.y;
+    const distance = Math.sqrt((dx * dx) + (dy * dy));
+    if (distance <= bestDistance) {
+      bestIndex = i;
+      bestDistance = distance;
+    }
+  }
+  return bestIndex;
+}
+
+function applyToneCurvePoints(points, { interactive = false } = {}) {
+  const normalized = normalizeToneCurvePoints(points);
+  updateAdjustments({
+    toneCurvePoints: normalized,
+    toneCurve: estimateLegacyToneCurveStrengthFromPoints(normalized),
+  }, { interactive, source: 'manual' });
+  renderToneCurveGraph();
+}
+
+function insertToneCurvePoint(points, point) {
+  const normalized = normalizeToneCurvePoints(points);
+  if (normalized.length >= TONE_CURVE_MAX_POINTS) return normalized;
+
+  const nextPoint = {
+    x: clamp(point.x, 0, 1),
+    y: clamp(point.y, 0, 1),
+  };
+  if (nextPoint.x <= 0.0001 || nextPoint.x >= 0.9999) return normalized;
+
+  const next = [...normalized, nextPoint]
+    .sort((a, b) => (a.x - b.x) || (a.y - b.y));
+  return normalizeToneCurvePoints(next);
+}
+
+function findClosestToneCurvePointIndex(points, targetPoint) {
+  if (!Array.isArray(points) || !points.length) return -1;
+
+  let bestIndex = -1;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (let i = 0; i < points.length; i += 1) {
+    const dx = (points[i].x || 0) - (targetPoint.x || 0);
+    const dy = (points[i].y || 0) - (targetPoint.y || 0);
+    const distance = (dx * dx) + (dy * dy);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestIndex = i;
+    }
+  }
+
+  return bestIndex;
+}
+
+function clampToneCurvePointForIndex(points, index, nextPoint) {
+  if (index <= 0) return { x: 0, y: 0 };
+  if (index >= points.length - 1) return { x: 1, y: 1 };
+
+  const leftX = points[index - 1].x + TONE_CURVE_MIN_X_GAP;
+  const rightX = points[index + 1].x - TONE_CURVE_MIN_X_GAP;
+  const clampedY = clamp(nextPoint.y, 0, 1);
+
+  if (rightX < leftX) {
+    const pinnedX = clamp((points[index - 1].x + points[index + 1].x) / 2, 0, 1);
+    return { x: pinnedX, y: clampedY };
+  }
+
+  return {
+    x: clamp(nextPoint.x, leftX, rightX),
+    y: clampedY,
+  };
+}
+
+function updateToneCurvePointAtIndex(points, index, nextPoint) {
+  const normalized = normalizeToneCurvePoints(points);
+  if (index <= 0 || index >= normalized.length - 1) return normalized;
+
+  const next = cloneToneCurvePoints(normalized);
+  next[index] = clampToneCurvePointForIndex(next, index, {
+    x: clamp(nextPoint.x, 0, 1),
+    y: clamp(nextPoint.y, 0, 1),
+  });
+  return normalizeToneCurvePoints(next);
+}
+
+function startToneCurveDrag(pointerId, index) {
+  toneCurveUiState.pointerId = pointerId;
+  toneCurveUiState.draggingPointIndex = index;
+  toneCurveUiState.draggingDidMove = false;
+}
+
+function clearToneCurveDrag() {
+  toneCurveUiState.pointerId = null;
+  toneCurveUiState.draggingPointIndex = null;
+  toneCurveUiState.draggingDidMove = false;
+}
+
+function updateToneCurveDragFromEvent(event, { interactive = true } = {}) {
+  if (!selectedPhoto()) return false;
+  if (toneCurveUiState.pointerId === null || toneCurveUiState.pointerId !== event.pointerId) return false;
+
+  const dragIndex = toneCurveUiState.draggingPointIndex;
+  if (typeof dragIndex !== 'number' || dragIndex <= 0) return false;
+
+  const metrics = toneCurveCanvasMetrics();
+  if (!metrics) return false;
+
+  const position = toneCurveCanvasPositionFromEvent(event, metrics);
+  if (!position) return false;
+
+  const nextPoint = canvasToToneCurvePoint(position.x, position.y, metrics);
+  const points = toneCurvePointsForPhoto(selectedPhoto());
+  if (dragIndex >= points.length - 1) return false;
+
+  const nextPoints = updateToneCurvePointAtIndex(points, dragIndex, nextPoint);
+  const currentPoint = points[dragIndex];
+  const updatedPoint = nextPoints[dragIndex];
+  if (!currentPoint || !updatedPoint) return false;
+
+  const moved = Math.abs(currentPoint.x - updatedPoint.x) > 0.0001
+    || Math.abs(currentPoint.y - updatedPoint.y) > 0.0001;
+  if (!moved) return false;
+
+  toneCurveUiState.draggingDidMove = true;
+  applyToneCurvePoints(nextPoints, { interactive });
+  return true;
+}
+
+function endToneCurveDrag({ commit = true } = {}) {
+  const hadDrag = toneCurveUiState.pointerId !== null;
+  const shouldCommit = commit && hadDrag;
+  clearToneCurveDrag();
+
+  if (!shouldCommit) return;
+  const photo = selectedPhoto();
+  if (!photo) return;
+  applyToneCurvePoints(toneCurvePointsForPhoto(photo), { interactive: false });
+}
+
 function buildFallbackImageStats(isHdrMerged = false) {
   if (autoFixModule?.buildFallbackImageStats) {
     return autoFixModule.buildFallbackImageStats(isHdrMerged, { coreApi: editorCore });
@@ -928,11 +1928,11 @@ function clampEditorAdjustments(adjustments, { rotation = 0 } = {}) {
     return editorCore.clampEditorAdjustments(adjustments, { rotation });
   }
 
-  return {
+  return cloneAdjustments({
     ...defaultAdjustments,
     ...(adjustments || {}),
     rotation: ((Math.round(rotation) % 360) + 360) % 360,
-  };
+  });
 }
 
 function estimateAutoAdjustments(stats, profile = 'natural', { isHdrMerged = false, rotation = 0 } = {}) {
@@ -1418,6 +2418,13 @@ function getPreviewGpuRenderer() {
 function canUseGpuPreview(adjustments, options = {}) {
   if (options.allowGpu !== true) return false;
 
+  const hasNonNeutralToneCurve = !isNeutralToneCurvePoints(
+    Array.isArray(adjustments?.toneCurvePoints) && adjustments.toneCurvePoints.length
+      ? adjustments.toneCurvePoints
+      : toneCurvePointsFromLegacyStrength(adjustments?.toneCurve || 0)
+  );
+  if (hasNonNeutralToneCurve) return false;
+
   if (options.forceFastGpu === true) {
     if (!options.fastMode) return false;
     if ((adjustments.sharpen || 0) > 0 || (adjustments.denoise || 0) > 0) return false;
@@ -1658,7 +2665,7 @@ async function addNormalizedItems(normalizedItems, { suppressDuplicateAlert = fa
     .filter((item) => !existing.has(item.originalPath))
     .map((item, index) => {
       const isHdrMerged = Boolean(item.isMergedHdr || item.hdrMetadata);
-      const baseAdjustments = { ...defaultAdjustments };
+      const baseAdjustments = cloneAdjustments(defaultAdjustments);
 
       return {
         id: `${item.originalPath}-${Date.now()}-${index}`,
@@ -1751,6 +2758,7 @@ async function addFiles(paths, { skipRawDecoderCheck = false, suppressDuplicateA
 function updateAdjustments(updates, { interactive = false, source = 'manual' } = {}) {
   const photo = selectedPhoto();
   if (!photo) return;
+  const normalizedUpdates = normalizeAdjustmentUpdates(updates);
 
   if (source !== 'preset' && state.presets.activePreset !== null) {
     state.presets.activePreset = null;
@@ -1763,11 +2771,23 @@ function updateAdjustments(updates, { interactive = false, source = 'manual' } =
 
   if (state.preview.applyToAll) {
     for (const item of state.photos) {
-      item.adjustments = { ...item.adjustments, ...updates };
+      item.adjustments = {
+        ...item.adjustments,
+        ...normalizedUpdates,
+      };
+      if (Object.prototype.hasOwnProperty.call(normalizedUpdates, 'toneCurvePoints')) {
+        item.adjustments.toneCurvePoints = cloneToneCurvePoints(normalizedUpdates.toneCurvePoints);
+      }
       markPhotoAdjustmentsDirty(item);
     }
   } else {
-    photo.adjustments = { ...photo.adjustments, ...updates };
+    photo.adjustments = {
+      ...photo.adjustments,
+      ...normalizedUpdates,
+    };
+    if (Object.prototype.hasOwnProperty.call(normalizedUpdates, 'toneCurvePoints')) {
+      photo.adjustments.toneCurvePoints = cloneToneCurvePoints(normalizedUpdates.toneCurvePoints);
+    }
     markPhotoAdjustmentsDirty(photo);
   }
 
@@ -1784,6 +2804,7 @@ function updateAdjustments(updates, { interactive = false, source = 'manual' } =
       debounceMs: 0,
       fullRender: false,
     });
+    renderToneCurveGraph();
     return;
   }
 
@@ -1810,6 +2831,7 @@ function updateAdjustments(updates, { interactive = false, source = 'manual' } =
     debounceMs: shouldDebounceSettledRender ? SETTLED_PREVIEW_DELAY_MS : 0,
     fullRender: false,
   });
+  renderToneCurveGraph();
 }
 
 function presetAdjustmentsForPhoto(presetName, photo) {
@@ -1873,6 +2895,10 @@ function presetAdjustmentsFromValues(values = {}) {
   PRESET_ADJUSTMENT_KEYS.forEach((key) => {
     out[key] = normalizePresetAdjustmentValue(key, values[key]);
   });
+  out.toneCurvePoints = normalizeToneCurvePoints(values?.toneCurvePoints);
+  if (isNeutralToneCurvePoints(out.toneCurvePoints) && out.toneCurve > 0) {
+    out.toneCurvePoints = toneCurvePointsFromLegacyStrength(out.toneCurve);
+  }
   return out;
 }
 
@@ -1891,6 +2917,7 @@ function presetStoragePayloadFromAdjustments(name, adjustments = {}) {
       ? Number((value / 100).toFixed(2))
       : Math.round(value);
   });
+  payload.toneCurvePoints = normalizeToneCurvePoints(adjustments?.toneCurvePoints);
 
   return payload;
 }
@@ -2036,6 +3063,7 @@ function closePresetDropdown() {
 function openPresetDropdown() {
   if (!el.presetDropdownMenu || !el.presetDropdownBtn) return;
   if (el.presetDropdownBtn.disabled) return;
+  closeTopbarCommandMenus();
   syncPresetDropdownOptions();
   el.presetDropdownMenu.classList.remove('hidden');
   el.presetDropdownBtn.setAttribute('aria-expanded', 'true');
@@ -2131,6 +3159,8 @@ function openSavePresetModal() {
   if (!selectedPhoto()) return;
   if (!el.savePresetModal || !el.presetNameInput) return;
 
+  closeTopbarCommandMenus();
+  closeExportSettingsModal();
   closePresetDropdown();
   el.savePresetModal.classList.remove('hidden');
   el.savePresetModal.setAttribute('aria-hidden', 'false');
@@ -2484,11 +3514,14 @@ function compareRenderStateForPhoto(photo) {
   };
 }
 
-function renderSplitPreview(photo, transform) {
+function renderSplitPreview(photo) {
   const compareState = compareRenderStateForPhoto(photo);
   const originalLabel = compareState.split.originalLabel;
   const cleanedLabel = compareState.split.cleanedLabel;
-  const sizeStyle = previewImageSizeStyle(photo);
+  const originalSizeStyle = previewImageSizeStyle(photo, { role: 'original-compare' });
+  const cleanedSizeStyle = previewImageSizeStyle(photo, { role: 'cleaned' });
+  const originalTransform = previewNodeTransform(photo, { role: 'original-compare' });
+  const cleanedTransform = previewNodeTransform(photo, { role: 'cleaned' });
 
   return `
     <div class="preview-grid">
@@ -2496,7 +3529,7 @@ function renderSplitPreview(photo, transform) {
         <div class="image-label">${escapeHtml(originalLabel)}</div>
         <div class="image-wrap">
           <div class="image-stage">
-            <img class="preview-image" style="transform:${transform};${sizeStyle}" src="${escapeHtml(compareState.split.originalSrc)}" alt="Original" />
+            <img class="preview-image" data-preview-role="original-compare" style="transform:${originalTransform};${originalSizeStyle}" src="${escapeHtml(compareState.split.originalSrc)}" alt="Original" />
           </div>
         </div>
       </div>
@@ -2504,7 +3537,7 @@ function renderSplitPreview(photo, transform) {
         <div class="image-label">${escapeHtml(cleanedLabel)}</div>
         <div class="image-wrap">
           <div class="image-stage">
-            <img class="preview-image" style="transform:${transform};${sizeStyle}" src="${escapeHtml(compareState.split.cleanedSrc)}" alt="Cleaned" />
+            <img class="preview-image" data-preview-role="cleaned" style="transform:${cleanedTransform};${cleanedSizeStyle}" src="${escapeHtml(compareState.split.cleanedSrc)}" alt="Cleaned" />
           </div>
         </div>
       </div>
@@ -2512,12 +3545,15 @@ function renderSplitPreview(photo, transform) {
   `;
 }
 
-function renderSliderPreview(photo, transform) {
+function renderSliderPreview(photo) {
   const compareState = compareRenderStateForPhoto(photo);
   const label = compareState.slider.label;
   const reveal = compareState.slider.reveal;
   const clipInset = `${100 - reveal}%`;
-  const sizeStyle = previewImageSizeStyle(photo);
+  const originalSizeStyle = previewImageSizeStyle(photo, { role: 'original-compare' });
+  const cleanedSizeStyle = previewImageSizeStyle(photo, { role: 'cleaned' });
+  const originalTransform = previewNodeTransform(photo, { role: 'original-compare' });
+  const cleanedTransform = previewNodeTransform(photo, { role: 'cleaned' });
 
   return `
     <div class="compare-card">
@@ -2526,9 +3562,9 @@ function renderSliderPreview(photo, transform) {
           <div class="image-stage compare-stage">
           <div class="compare-corner-label compare-corner-label-before">Before</div>
           <div class="compare-corner-label compare-corner-label-after">After</div>
-          <img class="compare-cleaned-image" style="transform:${transform};${sizeStyle}" src="${escapeHtml(compareState.slider.cleanedSrc)}" alt="Cleaned" />
+          <img class="compare-cleaned-image" data-preview-role="cleaned" style="transform:${cleanedTransform};${cleanedSizeStyle}" src="${escapeHtml(compareState.slider.cleanedSrc)}" alt="Cleaned" />
           <div class="compare-original-overlay" style="clip-path:inset(0 ${clipInset} 0 0);">
-            <img class="compare-original-image" style="transform:${transform};${sizeStyle}" src="${escapeHtml(compareState.slider.originalSrc)}" alt="Original" />
+            <img class="compare-original-image" data-preview-role="original-compare" style="transform:${originalTransform};${originalSizeStyle}" src="${escapeHtml(compareState.slider.originalSrc)}" alt="Original" />
           </div>
 
           <div class="compare-handle" style="left:${reveal}%;">
@@ -2556,9 +3592,7 @@ function attachPreviewInteractions() {
   const wraps = Array.from(document.querySelectorAll('.image-wrap'));
 
   function updateTransforms() {
-    document.querySelectorAll('.preview-image, .compare-original-image, .compare-cleaned-image').forEach((img) => {
-      img.style.transform = makePreviewTransform();
-    });
+    syncPreviewImagePresentation(selectedPhoto());
   }
 
   function startPan(event) {
@@ -2627,9 +3661,7 @@ function attachPreviewInteractions() {
       state.panX += dx;
       state.panY += dy;
 
-      document.querySelectorAll('.preview-image, .compare-original-image, .compare-cleaned-image').forEach((img) => {
-        img.style.transform = makePreviewTransform();
-      });
+      syncPreviewImagePresentation(selectedPhoto());
     });
 
     function endPan() {
@@ -2652,10 +3684,9 @@ function renderPreview() {
     return;
   }
 
-  const transform = makePreviewTransform();
   const previewBody = state.preview.mode === 'slider'
-    ? renderSliderPreview(photo, transform)
-    : renderSplitPreview(photo, transform);
+    ? renderSliderPreview(photo)
+    : renderSplitPreview(photo);
   const mergedFileName = pathBasename(photo.filePath || '');
   const mergedFolderPath = pathDirname(photo.filePath || '') || photo.filePath || '';
   const mergedFolderLabel = compactPathPreview(mergedFolderPath, { folder: true });
@@ -3009,6 +4040,7 @@ function render() {
   renderPhotoList();
   renderPreview();
   renderHistogramPanel();
+  renderToneCurveGraph();
   renderControls();
   renderHdrSummary();
   renderHdrQueueLists();
@@ -3031,9 +4063,8 @@ function render() {
     el.presetPunchyBtn,
     el.presetSoftBtn,
     el.rotateBtn,
-    el.saveCurrentBtn,
+    el.exportBtn,
     el.resetBtn,
-    el.exportAllBtn,
     el.zoomInBtn,
     el.zoomOutBtn,
     el.zoomFitBtn,
@@ -3079,6 +4110,7 @@ function render() {
   }
   if (el.addHdrFolderBtn) el.addHdrFolderBtn.disabled = queueRunning;
   if (el.exportMergedHdrBtn) el.exportMergedHdrBtn.disabled = !hasMergedPhotos;
+  syncExportSettingsUi();
 
   if (el.hdrActionHint) {
     let hint = '1) Add HDR Folder, 2) review detected sets, 3) press Start HDR Merge.';
@@ -3218,11 +4250,11 @@ async function pickHdrFolderFlow() {
   }
 }
 
-async function openHdrOutputFolderFlow() {
+async function openHdrOutputFolderFlow(targetPathOverride = '') {
   try {
     const queue = state.hdr.queue || null;
     const latest = lastMergedResult(queue);
-    const targetPath = queue?.outputDir || latest?.mergedPath || null;
+    const targetPath = targetPathOverride || queue?.outputDir || latest?.mergedPath || null;
 
     if (!targetPath) {
       alert('No HDR output folder is available yet. Run a merge first.');
@@ -3244,7 +4276,7 @@ async function loadMergedResultsIntoLibrary(mergedResults) {
     .filter((result) => result?.mergedPath)
     .filter((result) => !state.library.loadedMergedPaths.has(result.mergedPath));
 
-  if (!toLoad.length) return;
+  if (!toLoad.length) return 0;
 
   const response = await window.aceApi.openMergedTiffsInLibrary(toLoad);
 
@@ -3274,6 +4306,8 @@ async function loadMergedResultsIntoLibrary(mergedResults) {
   for (const result of toLoad) {
     state.library.loadedMergedPaths.add(result.mergedPath);
   }
+
+  return toLoad.length;
 }
 
 async function onQueueUpdated(queue) {
@@ -3287,26 +4321,20 @@ async function onQueueUpdated(queue) {
   state.hdr.loadedQueueId = queue.queueId;
 
   try {
-    await loadMergedResultsIntoLibrary(queue.mergedResults || []);
+    const loadedCount = await loadMergedResultsIntoLibrary(queue.mergedResults || []);
 
     if ((queue.mergedResults || []).length) {
       const latest = lastMergedResult(queue);
       const mergedCount = queue.mergedResults.length;
-      const statusLabel = queue.status === 'Completed' ? 'completed successfully' : queue.status.toLowerCase();
-
-      let message = `HDR merge ${statusLabel}.\n\n`;
-      message += `Merged TIFFs: ${mergedCount}\n`;
-      message += `Loaded into library: ${mergedCount}\n`;
-
-      if (queue.outputDir) {
-        message += `\nOutput folder:\n${queue.outputDir}\n`;
-      }
-
-      if (latest?.mergedPath) {
-        message += `\nLatest TIFF:\n${pathBasename(latest.mergedPath)}\n`;
-      }
-
-      alert(message);
+      const latestFileName = latest?.mergedPath ? pathBasename(latest.mergedPath) : '';
+      const fallbackOutputDir = latest?.mergedPath ? pathDirname(latest.mergedPath) : '';
+      openHdrMergeResultModal({
+        status: queue.status || 'Completed',
+        outputDir: queue.outputDir || fallbackOutputDir || '',
+        mergedCount,
+        loadedCount: Number.isFinite(loadedCount) ? loadedCount : mergedCount,
+        latestFileName,
+      });
     }
   } catch (error) {
     console.error(error);
@@ -3455,30 +4483,52 @@ async function retryFailedSetsFlow() {
   }
 }
 
+function openNormalExportResultModal(result, { savedFileName = '' } = {}) {
+  openExportResultModal({
+    outputDir: result?.outputDir || '',
+    savedCount: result?.exported?.length || 0,
+    failedCount: result?.failed?.length || 0,
+    savedFileName,
+  });
+}
+
 async function exportCurrent() {
   const photo = selectedPhoto();
   if (!photo) return;
 
   try {
-    const image = await getPhotoSourceImage(photo);
-    const dataUrl = processImageToDataUrl(
-      image,
-      resolveRenderAdjustments(photo.adjustments),
-      Number(el.hdrExportQuality?.value || 92) / 100
-    );
+    const outputDir = await resolveOutputFolderForNormalExport();
+    if (!outputDir) return;
 
-    const outPath = await window.aceApi.pickSaveFile(makeOutputName(photo.filePath));
-    if (!outPath) return;
+    const result = await exportPhotosWithSettings([photo], {
+      suffix: '_edited',
+      quality: resolveExportQuality(),
+      outputDir,
+    });
 
-    await window.aceApi.saveDataUrl({ outPath, dataUrl });
-    alert(`Saved to:\n${outPath}`);
+    if (!result?.ok) {
+      if (!result?.cancelled) {
+        throw new Error(result?.error || 'Export failed.');
+      }
+      return;
+    }
+
+    exportUiState.lastOutputDir = result.outputDir || exportUiState.lastOutputDir;
+    syncExportSettingsUi();
+    const outPath = result.exported?.[0]?.outPath || '';
+    openNormalExportResultModal(result, { savedFileName: outPath ? pathBasename(outPath) : '' });
   } catch (error) {
     console.error(error);
-    alert(`Could not save current image.\n\n${error.message || error}`);
+    alert(`Could not export current image.\n\n${error.message || error}`);
   }
 }
 
-async function exportPhotosWithSettings(photos, { suffix, quality, useHdrStrictNaming = false }) {
+async function exportPhotosWithSettings(photos, {
+  suffix,
+  quality,
+  useHdrStrictNaming = false,
+  outputDir = null,
+}) {
   const items = [];
 
   for (let i = 0; i < photos.length; i++) {
@@ -3509,6 +4559,7 @@ async function exportPhotosWithSettings(photos, { suffix, quality, useHdrStrictN
     suffix,
     quality,
     useHdrStrictNaming,
+    outputDir,
   });
 }
 
@@ -3516,10 +4567,14 @@ async function exportAll() {
   if (!state.photos.length) return;
 
   try {
-    const quality = Number(el.hdrExportQuality?.value || 92);
-    const suffix = '_edit';
+    const outputDir = await resolveOutputFolderForNormalExport();
+    if (!outputDir) return;
 
-    const result = await exportPhotosWithSettings(state.photos, { suffix, quality });
+    const result = await exportPhotosWithSettings(state.photos, {
+      suffix: '_edited',
+      quality: resolveExportQuality(),
+      outputDir,
+    });
 
     if (!result?.ok) {
       if (!result?.cancelled) {
@@ -3528,11 +4583,45 @@ async function exportAll() {
       return;
     }
 
-    const summary = `Export complete.\n\nSaved: ${result.exported.length}\nFailed: ${result.failed.length}\n\nFolder:\n${result.outputDir}`;
-    alert(summary);
+    exportUiState.lastOutputDir = result.outputDir || exportUiState.lastOutputDir;
+    syncExportSettingsUi();
+    openNormalExportResultModal(result);
   } catch (error) {
     console.error(error);
     alert(`Export failed for one or more images.\n\n${error.message || error}`);
+  }
+}
+
+async function exportSelection() {
+  const selected = exportScopePhotos('current-selection');
+  if (!selected.length) {
+    alert('No selected photos are available for export.');
+    return;
+  }
+
+  try {
+    const outputDir = await resolveOutputFolderForNormalExport();
+    if (!outputDir) return;
+
+    const result = await exportPhotosWithSettings(selected, {
+      suffix: '_edited',
+      quality: resolveExportQuality(),
+      outputDir,
+    });
+
+    if (!result?.ok) {
+      if (!result?.cancelled) {
+        throw new Error(result?.error || 'Export failed.');
+      }
+      return;
+    }
+
+    exportUiState.lastOutputDir = result.outputDir || exportUiState.lastOutputDir;
+    syncExportSettingsUi();
+    openNormalExportResultModal(result);
+  } catch (error) {
+    console.error(error);
+    alert(`Selection export failed.\n\n${error.message || error}`);
   }
 }
 
@@ -3544,11 +4633,13 @@ async function exportMergedHdr() {
   }
 
   try {
-    const quality = Number(el.hdrExportQuality?.value || 92);
+    const quality = resolveExportQuality();
+    const outputDir = activeExportOutputFolder();
     const result = await exportPhotosWithSettings(mergedPhotos, {
       suffix: '_edit',
       quality,
       useHdrStrictNaming: true,
+      outputDir,
     });
 
     if (!result?.ok) {
@@ -3557,6 +4648,9 @@ async function exportMergedHdr() {
       }
       return;
     }
+
+    exportUiState.lastOutputDir = result.outputDir || exportUiState.lastOutputDir;
+    syncExportSettingsUi();
 
     let message = `HDR export complete.\n\nSaved: ${result.exported.length}`;
     if (result.failed.length) {
@@ -3569,6 +4663,21 @@ async function exportMergedHdr() {
     console.error(error);
     alert(`HDR export failed.\n\n${error.message || error}`);
   }
+}
+
+async function exportFromSettingsModalFlow() {
+  const scope = normalizeExportScope(exportUiState.scope);
+  closeExportSettingsModal();
+
+  if (scope === 'current-preview') {
+    await exportCurrent();
+    return;
+  }
+  if (scope === 'current-selection') {
+    await exportSelection();
+    return;
+  }
+  await exportAll();
 }
 
 function showDropOverlay(show) {
@@ -3685,7 +4794,16 @@ async function getDroppedPaths(event) {
   return out;
 }
 
+el.importMenuBtn?.addEventListener('click', () => {
+  toggleImportMenu();
+});
+
+el.exportBtn?.addEventListener('click', () => {
+  openExportSettingsModal();
+});
+
 el.addPhotosBtn?.addEventListener('click', () => {
+  closeTopbarCommandMenus();
   pickPhotos();
 });
 
@@ -3694,6 +4812,7 @@ el.miniAddPhotosBtn?.addEventListener('click', () => {
 });
 
 el.addFolderBtn?.addEventListener('click', () => {
+  closeTopbarCommandMenus();
   pickFolder();
 });
 
@@ -3706,6 +4825,7 @@ el.clearLibraryBtn?.addEventListener('click', () => {
 });
 
 el.addHdrFolderBtn?.addEventListener('click', () => {
+  closeTopbarCommandMenus();
   pickHdrFolderFlow();
 });
 
@@ -3723,10 +4843,6 @@ el.retryFailedBtn?.addEventListener('click', () => {
 
 el.cancelHdrMergeBtn?.addEventListener('click', () => {
   cancelBatchHdrMergeFlow();
-});
-
-el.exportAllBtn?.addEventListener('click', () => {
-  exportAll();
 });
 
 el.exportMergedHdrBtn?.addEventListener('click', () => {
@@ -3813,8 +4929,190 @@ el.savePresetModal?.addEventListener('click', (event) => {
   }
 });
 
-el.saveCurrentBtn?.addEventListener('click', () => {
-  exportCurrent();
+el.cancelExportSettingsBtn?.addEventListener('click', () => {
+  closeExportSettingsModal();
+});
+
+el.confirmExportFromSettingsBtn?.addEventListener('click', () => {
+  exportFromSettingsModalFlow();
+});
+
+el.exportScopeGroup?.addEventListener('click', (event) => {
+  const scopeButton = event.target?.closest?.('[data-export-scope]');
+  if (!scopeButton) return;
+  setExportScope(String(scopeButton.dataset.exportScope || 'current-preview'));
+});
+
+el.setExportOutputFolderBtn?.addEventListener('click', () => {
+  pickExportOutputFolderFlow();
+});
+
+el.clearExportOutputFolderBtn?.addEventListener('click', () => {
+  clearExportOutputFolderFlow();
+});
+
+el.openExportOutputFolderBtn?.addEventListener('click', () => {
+  revealExportOutputFolderFlow();
+});
+
+el.toneCurveSectionToggleBtn?.addEventListener('click', () => {
+  const expanded = el.toneCurveSectionToggleBtn.getAttribute('aria-expanded') !== 'false';
+  setToneCurveSectionExpanded(!expanded);
+});
+
+el.toneCurveResetBtn?.addEventListener('click', () => {
+  if (!selectedPhoto()) return;
+  applyToneCurvePoints(createNeutralToneCurvePoints(), { interactive: false });
+});
+
+el.toneCurveCanvas?.addEventListener('pointerdown', (event) => {
+  if (event.button !== 0) return;
+  if (!toneCurveUiState.expanded) return;
+
+  const photo = selectedPhoto();
+  if (!photo) return;
+
+  const metrics = toneCurveCanvasMetrics();
+  if (!metrics) return;
+
+  const position = toneCurveCanvasPositionFromEvent(event, metrics);
+  if (!position) return;
+
+  const points = toneCurvePointsForPhoto(photo);
+  const hitIndex = findToneCurvePointIndexAtPosition(points, position, metrics);
+  if (hitIndex > 0 && hitIndex < points.length - 1) {
+    startToneCurveDrag(event.pointerId, hitIndex);
+    try {
+      el.toneCurveCanvas.setPointerCapture(event.pointerId);
+    } catch {
+      // Pointer capture can fail in edge browser contexts; drag still works best-effort.
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    return;
+  }
+
+  if (hitIndex === 0 || hitIndex === points.length - 1) {
+    event.preventDefault();
+    event.stopPropagation();
+    return;
+  }
+
+  const target = canvasToToneCurvePoint(position.x, position.y, metrics);
+  const nextPoints = insertToneCurvePoint(points, target);
+  if (nextPoints.length === points.length) {
+    event.preventDefault();
+    event.stopPropagation();
+    return;
+  }
+
+  applyToneCurvePoints(nextPoints, { interactive: true });
+  const insertedIndex = findClosestToneCurvePointIndex(nextPoints, target);
+  if (insertedIndex > 0 && insertedIndex < nextPoints.length - 1) {
+    startToneCurveDrag(event.pointerId, insertedIndex);
+    try {
+      el.toneCurveCanvas.setPointerCapture(event.pointerId);
+    } catch {
+      // Pointer capture can fail in edge browser contexts; drag still works best-effort.
+    }
+  } else {
+    clearToneCurveDrag();
+    applyToneCurvePoints(nextPoints, { interactive: false });
+  }
+
+  event.preventDefault();
+  event.stopPropagation();
+});
+
+el.toneCurveCanvas?.addEventListener('pointermove', (event) => {
+  if (toneCurveUiState.pointerId === null || toneCurveUiState.pointerId !== event.pointerId) return;
+  const moved = updateToneCurveDragFromEvent(event, { interactive: true });
+  if (moved) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+});
+
+const finishToneCurvePointerDrag = (event, { commit = true } = {}) => {
+  if (toneCurveUiState.pointerId === null || toneCurveUiState.pointerId !== event.pointerId) return;
+
+  updateToneCurveDragFromEvent(event, { interactive: true });
+  if (el.toneCurveCanvas?.hasPointerCapture?.(event.pointerId)) {
+    try {
+      el.toneCurveCanvas.releasePointerCapture(event.pointerId);
+    } catch {
+      // Ignore capture release failures.
+    }
+  }
+  endToneCurveDrag({ commit });
+  event.preventDefault();
+  event.stopPropagation();
+};
+
+el.toneCurveCanvas?.addEventListener('pointerup', (event) => {
+  finishToneCurvePointerDrag(event, { commit: true });
+});
+
+el.toneCurveCanvas?.addEventListener('pointercancel', (event) => {
+  finishToneCurvePointerDrag(event, { commit: true });
+});
+
+el.toneCurveCanvas?.addEventListener('lostpointercapture', (event) => {
+  if (toneCurveUiState.pointerId === null || toneCurveUiState.pointerId !== event.pointerId) return;
+  endToneCurveDrag({ commit: true });
+});
+
+el.toneCurveCanvas?.addEventListener('dblclick', (event) => {
+  if (!toneCurveUiState.expanded) return;
+  if (!selectedPhoto()) return;
+
+  const metrics = toneCurveCanvasMetrics();
+  if (!metrics) return;
+  const position = toneCurveCanvasPositionFromEvent(event, metrics);
+  if (!position) return;
+
+  const points = toneCurvePointsForPhoto(selectedPhoto());
+  const hitIndex = findToneCurvePointIndexAtPosition(points, position, metrics);
+  if (hitIndex <= 0 || hitIndex >= points.length - 1) return;
+
+  const nextPoints = points.filter((_, index) => index !== hitIndex);
+  applyToneCurvePoints(nextPoints, { interactive: false });
+  event.preventDefault();
+  event.stopPropagation();
+});
+
+el.exportSettingsModal?.addEventListener('click', (event) => {
+  if (event.target === el.exportSettingsModal) {
+    closeExportSettingsModal();
+  }
+});
+
+el.exportResultRevealBtn?.addEventListener('click', () => {
+  revealExportOutputFolderFlow(exportResultState.outputDir || '');
+});
+
+el.closeExportResultBtn?.addEventListener('click', () => {
+  closeExportResultModal();
+});
+
+el.exportResultModal?.addEventListener('click', (event) => {
+  if (event.target === el.exportResultModal) {
+    closeExportResultModal();
+  }
+});
+
+el.hdrMergeResultRevealBtn?.addEventListener('click', () => {
+  openHdrOutputFolderFlow(hdrMergeResultState.outputDir || '');
+});
+
+el.closeHdrMergeResultBtn?.addEventListener('click', () => {
+  closeHdrMergeResultModal();
+});
+
+el.hdrMergeResultModal?.addEventListener('click', (event) => {
+  if (event.target === el.hdrMergeResultModal) {
+    closeHdrMergeResultModal();
+  }
 });
 
 el.zoomInBtn?.addEventListener('click', () => {
@@ -3854,10 +5152,15 @@ el.autoFixBtn?.addEventListener('click', async () => {
 
   try {
     const stats = await ensurePhotoAnalysis(photo, { highPriority: true });
-    updateAdjustments(estimateAutoAdjustments(stats, 'auto', {
+    const autoAdjustments = estimateAutoAdjustments(stats, 'auto', {
       isHdrMerged: Boolean(photo.isHdrMerged),
       rotation: photo.adjustments?.rotation || 0,
-    }));
+    });
+    // v1 ownership: Auto Fix must be deterministic and never stack tone-curve changes.
+    const currentCurvePoints = normalizeToneCurvePoints(photo.adjustments?.toneCurvePoints);
+    autoAdjustments.toneCurvePoints = currentCurvePoints;
+    autoAdjustments.toneCurve = estimateLegacyToneCurveStrengthFromPoints(currentCurvePoints);
+    updateAdjustments(autoAdjustments);
   } catch (error) {
     console.warn('Auto analysis fallback:', error);
     alert('Could not auto-fix that photo.');
@@ -3879,7 +5182,7 @@ el.resetBtn?.addEventListener('click', () => {
 
   state.presets.activePreset = null;
   syncPresetButtonState();
-  updateAdjustments({ ...defaultAdjustments });
+  updateAdjustments(cloneAdjustments(defaultAdjustments));
 });
 
 el.copyToAllBtn?.addEventListener('click', async () => {
@@ -3887,7 +5190,7 @@ el.copyToAllBtn?.addEventListener('click', async () => {
   if (!photo) return;
 
   for (const item of state.photos) {
-    item.adjustments = { ...photo.adjustments };
+    item.adjustments = cloneAdjustments(photo.adjustments);
     markPhotoAdjustmentsDirty(item);
   }
 
@@ -3972,6 +5275,9 @@ window.addEventListener('scroll', () => {
 
 document.addEventListener('mousedown', (event) => {
   state.library.interactionActive = Boolean(event.target?.closest?.('#libraryLeftSection'));
+  if (!event.target?.closest?.('.command-menu-wrap')) {
+    closeTopbarCommandMenus();
+  }
   if (!event.target?.closest?.('.preset-manager-row')) {
     closePresetDropdown();
   }
@@ -3982,9 +5288,37 @@ document.addEventListener('focusin', (event) => {
 }, true);
 
 document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && isExportResultModalOpen()) {
+    event.preventDefault();
+    closeExportResultModal();
+    return;
+  }
+  if (event.key === 'Escape' && isHdrMergeResultModalOpen()) {
+    event.preventDefault();
+    closeHdrMergeResultModal();
+    return;
+  }
+  if (event.key === 'Enter' && isExportSettingsModalOpen()) {
+    const targetTag = String(event.target?.tagName || '').toLowerCase();
+    if (targetTag !== 'button' && targetTag !== 'input' && targetTag !== 'textarea') {
+      event.preventDefault();
+      exportFromSettingsModalFlow();
+      return;
+    }
+  }
+  if (event.key === 'Escape' && isExportSettingsModalOpen()) {
+    event.preventDefault();
+    closeExportSettingsModal();
+    return;
+  }
   if (event.key === 'Escape' && isSavePresetModalOpen()) {
     event.preventDefault();
     closeSavePresetModal();
+    return;
+  }
+  if (event.key === 'Escape' && isCommandMenuOpen(el.importMenuBtn, el.importMenu)) {
+    event.preventDefault();
+    closeTopbarCommandMenus();
     return;
   }
   if (event.key === 'Escape' && isPresetDropdownOpen()) {
@@ -4028,6 +5362,7 @@ bindLeftSectionToggle(el.toggleLibrarySection);
 initLeftPanelResizer();
 syncLeftPanelLayoutState();
 setHdrDetailsExpanded(false);
+setToneCurveSectionExpanded(true);
 el.toggleHdrDetailsBtn?.addEventListener('click', () => {
   const expanded = el.toggleHdrDetailsBtn.getAttribute('aria-expanded') === 'true';
   setHdrDetailsExpanded(!expanded);
@@ -4087,9 +5422,7 @@ window.aceApi.onAppReady(() => {
 });
 
 (async () => {
-  if (el.hdrExportQualityValue && el.hdrExportQuality) {
-    el.hdrExportQualityValue.textContent = String(el.hdrExportQuality.value);
-  }
+  syncExportSettingsUi();
 
   try {
     const queue = await window.aceApi.getMergeQueueProgress();

@@ -210,6 +210,15 @@
       return coreApi.clampEditorAdjustments(adjustments, { rotation });
     }
 
+    const toneCurve = clamp(Math.round(adjustments.toneCurve || 0), 0, 100);
+    const toneCurvePoints = Array.isArray(adjustments?.toneCurvePoints)
+      ? adjustments.toneCurvePoints
+      : (
+        coreApi?.toneCurvePointsFromLegacyStrength
+          ? coreApi.toneCurvePointsFromLegacyStrength(toneCurve)
+          : [{ x: 0, y: 0 }, { x: 1, y: 1 }]
+      );
+
     return {
       exposure: clamp(Math.round(adjustments.exposure || 0), -400, 400),
       contrast: clamp(Math.round(adjustments.contrast || 0), -100, 100),
@@ -217,7 +226,8 @@
       shadows: clamp(Math.round(adjustments.shadows || 0), -100, 100),
       whites: clamp(Math.round(adjustments.whites || 0), -100, 100),
       blacks: clamp(Math.round(adjustments.blacks || 0), -100, 100),
-      toneCurve: clamp(Math.round(adjustments.toneCurve || 0), 0, 100),
+      toneCurve,
+      toneCurvePoints,
       clarity: clamp(Math.round(adjustments.clarity || 0), -100, 100),
       dehaze: clamp(Math.round(adjustments.dehaze || 0), -100, 100),
       vibrance: clamp(Math.round(adjustments.vibrance || 0), -100, 100),
@@ -251,6 +261,7 @@
       whites: 0,
       blacks: 0,
       toneCurve: 0,
+      toneCurvePoints: [{ x: 0, y: 0 }, { x: 1, y: 1 }],
       clarity: 0,
       dehaze: 0,
       sharpen: 0,

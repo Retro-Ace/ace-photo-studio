@@ -39,11 +39,183 @@
     return Math.pow(clamp(shoulderMapped, 0, 1), gamma);
   }
 
+  // Legacy export kept for compatibility with existing renderer/module wiring.
   function applySubtleSCurve(value, strength = 0) {
     const x = clamp(value, 0, 1);
     const safeStrength = clamp(strength, 0, 0.35);
     const curveDelta = x * (1 - x) * (2 * x - 1);
     return clamp(x + curveDelta * safeStrength, 0, 1);
+  }
+
+  function createNeutralToneCurvePoints() {
+    return [
+      { x: 0, y: 0 },
+      { x: 1, y: 1 },
+    ];
+  }
+
+  function normalizeToneCurvePoints(rawPoints, maxPoints = 8) {
+    const maxInternalPoints = Math.max(0, Math.min(12, Math.round(maxPoints || 8)) - 2);
+    const points = [];
+    const pushPoint = (xRaw, yRaw) => {
+      const x = Number(xRaw);
+      const y = Number(yRaw);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+      points.push({
+        x: Math.round(clamp(x, 0, 1) * 1000) / 1000,
+        y: Math.round(clamp(y, 0, 1) * 1000) / 1000,
+      });
+    };
+
+    let source = rawPoints;
+    if (typeof source === 'string') {
+      try {
+        source = JSON.parse(source);
+      } catch {
+        source = null;
+      }
+    }
+
+    if (Array.isArray(source)) {
+      for (const entry of source) {
+        if (Array.isArray(entry)) {
+          pushPoint(entry[0], entry[1]);
+          continue;
+        }
+        if (entry && typeof entry === 'object') {
+          pushPoint(entry.x, entry.y);
+        }
+      }
+    }
+
+    const sortedInternal = points
+      .filter((point) => point.x > 0 && point.x < 1)
+      .sort((a, b) => (a.x - b.x) || (a.y - b.y));
+
+    const deduped = [];
+    for (const point of sortedInternal) {
+      const previous = deduped[deduped.length - 1];
+      if (previous && Math.abs(previous.x - point.x) < 0.0005) {
+        deduped[deduped.length - 1] = point;
+      } else {
+        deduped.push(point);
+      }
+    }
+
+    return [
+      { x: 0, y: 0 },
+      ...deduped.slice(0, maxInternalPoints),
+      { x: 1, y: 1 },
+    ];
+  }
+
+  function toneCurvePointsFromLegacyStrength(strengthRaw) {
+    const strength = clamp(Number(strengthRaw) || 0, 0, 100) / 100;
+    if (strength <= 0.0001) {
+      return createNeutralToneCurvePoints();
+    }
+
+    const shoulderLift = 0.033 * strength;
+    return normalizeToneCurvePoints([
+      { x: 0, y: 0 },
+      { x: 0.25, y: clamp(0.25 - shoulderLift, 0, 1) },
+      { x: 0.75, y: clamp(0.75 + shoulderLift, 0, 1) },
+      { x: 1, y: 1 },
+    ]);
+  }
+
+  function isNeutralToneCurvePoints(points) {
+    const normalized = normalizeToneCurvePoints(points);
+    return normalized.length === 2
+      && normalized[0].x === 0
+      && normalized[0].y === 0
+      && normalized[1].x === 1
+      && normalized[1].y === 1;
+  }
+
+  function buildToneCurveLut(points, sampleCount = 1024) {
+    const normalized = normalizeToneCurvePoints(points);
+    const count = Math.max(16, Math.round(sampleCount || 1024));
+    const lut = new Float32Array(count);
+    if (!normalized.length) return lut;
+
+    const n = normalized.length;
+    const xs = new Array(n);
+    const ys = new Array(n);
+    for (let i = 0; i < n; i += 1) {
+      xs[i] = normalized[i].x;
+      ys[i] = normalized[i].y;
+    }
+
+    const deltas = new Array(Math.max(1, n - 1)).fill(0);
+    const slopes = new Array(n).fill(0);
+
+    for (let i = 0; i < n - 1; i += 1) {
+      const span = Math.max(0.000001, xs[i + 1] - xs[i]);
+      deltas[i] = (ys[i + 1] - ys[i]) / span;
+    }
+
+    slopes[0] = deltas[0];
+    slopes[n - 1] = deltas[n - 2] || deltas[0];
+    for (let i = 1; i < n - 1; i += 1) {
+      if (deltas[i - 1] * deltas[i] <= 0) {
+        slopes[i] = 0;
+      } else {
+        slopes[i] = (deltas[i - 1] + deltas[i]) / 2;
+      }
+    }
+
+    for (let i = 0; i < n - 1; i += 1) {
+      const delta = deltas[i];
+      if (Math.abs(delta) <= 0.0000001) {
+        slopes[i] = 0;
+        slopes[i + 1] = 0;
+        continue;
+      }
+      const a = slopes[i] / delta;
+      const b = slopes[i + 1] / delta;
+      const sum = a * a + b * b;
+      if (sum > 9) {
+        const factor = 3 / Math.sqrt(sum);
+        slopes[i] = factor * a * delta;
+        slopes[i + 1] = factor * b * delta;
+      }
+    }
+
+    let segment = 0;
+    for (let i = 0; i < count; i += 1) {
+      const x = i / (count - 1);
+      while (segment < n - 2 && x > xs[segment + 1]) {
+        segment += 1;
+      }
+
+      const x0 = xs[segment];
+      const x1 = xs[segment + 1];
+      const y0 = ys[segment];
+      const y1 = ys[segment + 1];
+      const m0 = slopes[segment];
+      const m1 = slopes[segment + 1];
+      const span = Math.max(0.000001, x1 - x0);
+      const t = clamp((x - x0) / span, 0, 1);
+      const t2 = t * t;
+      const t3 = t2 * t;
+
+      const h00 = (2 * t3) - (3 * t2) + 1;
+      const h10 = t3 - (2 * t2) + t;
+      const h01 = (-2 * t3) + (3 * t2);
+      const h11 = t3 - t2;
+      const y = h00 * y0 + h10 * span * m0 + h01 * y1 + h11 * span * m1;
+      lut[i] = clamp(y, 0, 1);
+    }
+
+    return lut;
+  }
+
+  function sampleToneCurveLut(lut, valueRaw) {
+    if (!lut || !lut.length) return clamp(valueRaw, 0, 1);
+    const value = clamp(valueRaw, 0, 1);
+    const index = Math.round(value * (lut.length - 1));
+    return clamp(lut[index], 0, 1);
   }
 
   function applyWarmthNormalized(r, g, b, warmth) {
@@ -155,8 +327,11 @@
     const filmicShoulder = clamp(Math.max(0, -highlights) * 0.08 + Math.max(0, whites) * 0.05, 0, 0.22);
     const filmicGamma = clamp(1 + Math.max(0, contrast) * 0.05, 1, 1.06);
     const hasFilmic = !fastMode && (filmicToe > 0 || filmicShoulder > 0);
-    const toneCurveStrength = clamp((adjustments.toneCurve || 0) / 100, 0, 0.35);
-    const hasToneCurve = toneCurveStrength > 0.0001;
+    const resolvedToneCurvePoints = Array.isArray(adjustments?.toneCurvePoints) && adjustments.toneCurvePoints.length
+      ? normalizeToneCurvePoints(adjustments.toneCurvePoints)
+      : toneCurvePointsFromLegacyStrength(adjustments?.toneCurve || 0);
+    const hasToneCurve = !isNeutralToneCurvePoints(resolvedToneCurvePoints);
+    const toneCurveLut = hasToneCurve ? buildToneCurveLut(resolvedToneCurvePoints, 1024) : null;
     const needsToneMask = hasShadows || hasHighlights || hasWhites || hasBlacks;
 
     for (let i = 0; i < data.length; i += 4) {
@@ -201,10 +376,9 @@
       }
 
       if (hasToneCurve) {
-        // Subtle S-curve after exposure/highlight/shadow shaping.
-        r = applySubtleSCurve(r, toneCurveStrength);
-        g = applySubtleSCurve(g, toneCurveStrength);
-        b = applySubtleSCurve(b, toneCurveStrength);
+        r = sampleToneCurveLut(toneCurveLut, r);
+        g = sampleToneCurveLut(toneCurveLut, g);
+        b = sampleToneCurveLut(toneCurveLut, b);
       }
 
       if (hasContrast) {

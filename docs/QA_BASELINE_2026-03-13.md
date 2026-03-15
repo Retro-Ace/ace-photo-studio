@@ -1,5 +1,11 @@
 # QA Baseline Evidence - 2026-03-13
 
+## Release Context
+
+- This baseline was captured before the final v1.1.0 UI polish pass (top-bar Import/Export workflow consolidation, styled export/HDR completion modals, and visible Tone Curve panel refinements).
+- Core merge/isolation/naming/bit-depth evidence in this file remains useful as a pre-release anchor.
+- For v1.1.0 sign-off, pair this baseline with the updated manual gate in `docs/RELEASE_GATE_CHECKLIST.md`.
+
 ## Scope
 
 Release-gate baseline run before renderer/main refactor work.

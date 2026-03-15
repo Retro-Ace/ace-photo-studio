@@ -611,11 +611,15 @@ class RawService {
     return probe;
   }
 
-  makeCachedPreviewPath(inputPath) {
+  makeCachedPreviewPath(inputPath, options = {}) {
     const ext = path.extname(inputPath);
     const base = path.basename(inputPath, ext);
     const hash = makeHashForPath(inputPath);
-    return path.join(this.previewCacheDir, `${base}-${hash}.jpg`);
+    const rawVariantSuffix = String(options?.variantSuffix || '').trim();
+    const variantSuffix = rawVariantSuffix
+      ? `-${rawVariantSuffix.replace(/[^a-z0-9_-]/gi, '')}`
+      : '';
+    return path.join(this.previewCacheDir, `${base}-${hash}${variantSuffix}.jpg`);
   }
 
   async checkPipeline() {
@@ -748,7 +752,10 @@ class RawService {
     }
 
     const ext = path.extname(resolvedPath).toLowerCase();
-    const mergeSourceDng = ext === '.dng' && options.context === 'hdr-merge-source';
+    const context = String(options.context || '').trim().toLowerCase();
+    const lensCorrectionEligibleDng = ext === '.dng'
+      && (context === 'hdr-merge-source' || context === 'single-import');
+    const lensCorrectionContextLabel = context || 'default';
     const legacyEnableFlag = envFlagEnabled(process.env[DJI_LENS_CORRECTION_LEGACY_ENABLE_ENV]);
     const disableByEnv = envFlagEnabled(process.env[DJI_LENS_CORRECTION_DISABLE_ENV]);
     const disableByOption = options.enableLensCorrection === false;
@@ -759,7 +766,7 @@ class RawService {
     let initialLensMode = 'not-requested';
     let initialSkipReason = 'not-requested';
 
-    if (mergeSourceDng) {
+    if (lensCorrectionEligibleDng) {
       if (correctionDisabled) {
         initialLensMode = 'disabled';
         initialSkipReason = disableByEnv
@@ -850,9 +857,9 @@ class RawService {
     }
 
     this.logger(`RAW convert start: ${resolvedPath}`);
-    if (mergeSourceDng && correctionDisabled) {
+    if (lensCorrectionEligibleDng && correctionDisabled) {
       this.logger(
-        `RAW lens correction disabled (${initialSkipReason}) for merge-source DNG: ${resolvedPath}` +
+        `RAW lens correction disabled (${initialSkipReason}) for ${lensCorrectionContextLabel} DNG: ${resolvedPath}` +
         (disableByEnv && legacyEnableFlag
           ? `; ${DJI_LENS_CORRECTION_DISABLE_ENV} takes precedence over ${DJI_LENS_CORRECTION_LEGACY_ENABLE_ENV}`
           : '')
@@ -864,11 +871,11 @@ class RawService {
         );
       }
       this.logger(
-        `RAW lens correction requested (default-on DJI Mavic 3 merge-source path) for DNG: ${resolvedPath}`
+        `RAW lens correction requested (default-on DJI Mavic 3 path, context=${lensCorrectionContextLabel}) for DNG: ${resolvedPath}`
       );
-    } else if (mergeSourceDng) {
+    } else if (lensCorrectionEligibleDng) {
       this.logger(
-        `RAW lens correction not requested (${initialSkipReason || 'not-dji-mavic-3'}) for merge-source DNG: ${resolvedPath}`
+        `RAW lens correction not requested (${initialSkipReason || 'not-dji-mavic-3'}) for ${lensCorrectionContextLabel} DNG: ${resolvedPath}`
       );
     }
 
@@ -1158,9 +1165,10 @@ class RawService {
   }
 
   // RAW preview prefers converted TIFF as source, then falls back to RAW input.
-  async ensureRawPreviewImage(rawPath, tiffPath = null) {
+  async ensureRawPreviewImage(rawPath, tiffPath = null, options = {}) {
     const resolvedRawPath = path.resolve(rawPath);
-    const previewPath = this.makeCachedPreviewPath(resolvedRawPath);
+    const previewVariant = options?.lensCorrectionRequested ? 'lc1' : '';
+    const previewPath = this.makeCachedPreviewPath(resolvedRawPath, { variantSuffix: previewVariant });
 
     if (fs.existsSync(previewPath)) {
       return {

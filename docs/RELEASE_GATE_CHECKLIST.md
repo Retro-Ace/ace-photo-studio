@@ -13,6 +13,7 @@ Use this as the final manual + script gate after significant UI/editing/HDR chan
 1. `npm run test:bracket-grouping` => PASS/FAIL
 2. `npm run test:merge-isolation` => PASS/FAIL
 3. `npm run test:hdr-samples` => PASS/FAIL
+4. `npm run test:editor-regressions` => PASS/FAIL
 
 ## A) Neutral Load / Reset Safety (Critical)
 
@@ -42,10 +43,12 @@ Use this as the final manual + script gate after significant UI/editing/HDR chan
 
 ## D) Preview / Export Parity (Critical)
 
-1. Set a non-trivial edit (tone/detail/color).
-2. Export Current JPG and compare to settled preview.
-3. Run Export All JPG and Batch HDR Export; spot-check at least 3 images.
-4. Adjust JPEG quality slider and verify output quality differences are observable and sane.
+1. Open top-bar `Export` and confirm `Export Settings` modal appears.
+2. Verify scope buttons function: `Current Preview`, `Current Selection`, `All Loaded Photos`.
+3. Set a non-trivial edit (tone/detail/color), export `Current Preview`, and compare to settled preview.
+4. Run `All Loaded Photos` export and `Batch HDR Export`; spot-check at least 3 images.
+5. Adjust top-bar JPEG quality slider and verify output quality differences are observable and sane.
+6. Confirm normal export completion appears in ACE-styled `Export Complete` modal.
 
 ## E) HDR Merge Workflow / Isolation (Critical)
 
@@ -76,17 +79,26 @@ Use this as the final manual + script gate after significant UI/editing/HDR chan
 3. Histogram clears/fallbacks gracefully when no photo is selected.
 4. No UI stutter or runaway refresh loops during rapid slider drags.
 
-## I) UI Regression Sweep (High)
+## I) Tone Curve Behavior (High)
+
+1. Tone Curve section expands/collapses reliably.
+2. Curve canvas renders histogram backdrop when a photo is selected.
+3. Add/move/remove curve points and verify processed preview updates.
+4. `Reset Curve` returns to neutral straight-line curve.
+5. Save/load user preset and confirm tone-curve shape persists as expected.
+
+## J) UI Regression Sweep (High)
 
 1. Header actions and top-bar export controls remain wired.
-2. Left panel collapse/expand and resizer still function.
-3. Retry Failed button hidden/disabled behavior remains correct.
-4. Merged TIFF banner/path display remains readable and accurate.
-5. Keyboard shortcuts/menu commands still trigger expected actions.
+2. `Import` menu actions remain wired (`Add Photos...`, `Add Folder...`, `Add HDR Folder...`).
+3. Left panel collapse/expand and resizer still function.
+4. Retry Failed button hidden/disabled behavior remains correct.
+5. Merged TIFF banner/path display remains readable and accurate.
+6. Keyboard shortcuts/menu commands still trigger expected actions.
 
-## J) Final Sign-Off
+## K) Final Sign-Off
 
 - Critical sections A-F: all PASS
-- High sections G-I: no unresolved FAILs without explicit waiver
+- High sections G-J: no unresolved FAILs without explicit waiver
 - Diagnostics and logs reviewed for anomalous warnings
 - Release decision: `GO` / `NO-GO`

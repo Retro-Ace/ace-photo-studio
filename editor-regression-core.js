@@ -8,6 +8,8 @@
   }
 })(typeof globalThis !== 'undefined' ? globalThis : this, () => {
   const FLAT_HDR_RECOVERY_TRIGGER = 0.36;
+  const MAX_TONE_CURVE_POINTS = 8;
+  const TONE_CURVE_POINT_PRECISION = 1000;
 
   const defaultAdjustments = {
     exposure: 0,
@@ -20,6 +22,10 @@
     whites: 0,
     blacks: 0,
     toneCurve: 0,
+    toneCurvePoints: [
+      { x: 0, y: 0 },
+      { x: 1, y: 1 },
+    ],
     clarity: 0,
     dehaze: 0,
     sharpen: 0,
@@ -46,6 +52,131 @@
 
   function clamp(value, min, max) {
     return Math.min(max, Math.max(min, value));
+  }
+
+  function roundCurvePoint(value) {
+    return Math.round(clamp(value, 0, 1) * TONE_CURVE_POINT_PRECISION) / TONE_CURVE_POINT_PRECISION;
+  }
+
+  function createNeutralToneCurvePoints() {
+    return [
+      { x: 0, y: 0 },
+      { x: 1, y: 1 },
+    ];
+  }
+
+  function normalizeToneCurvePoints(rawPoints, { maxPoints = MAX_TONE_CURVE_POINTS } = {}) {
+    const maxInternalPoints = Math.max(0, Math.min(12, Math.round(maxPoints || MAX_TONE_CURVE_POINTS)) - 2);
+    const parsed = [];
+    const pushPoint = (xRaw, yRaw) => {
+      const x = Number(xRaw);
+      const y = Number(yRaw);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+      parsed.push({
+        x: clamp(x, 0, 1),
+        y: clamp(y, 0, 1),
+      });
+    };
+
+    let source = rawPoints;
+    if (typeof source === 'string') {
+      try {
+        source = JSON.parse(source);
+      } catch {
+        source = null;
+      }
+    }
+
+    if (Array.isArray(source)) {
+      for (const entry of source) {
+        if (Array.isArray(entry)) {
+          pushPoint(entry[0], entry[1]);
+          continue;
+        }
+        if (entry && typeof entry === 'object') {
+          pushPoint(entry.x, entry.y);
+        }
+      }
+    }
+
+    const sorted = parsed
+      .filter((point) => point.x > 0 && point.x < 1)
+      .sort((a, b) => (a.x - b.x) || (a.y - b.y));
+
+    const deduped = [];
+    for (const point of sorted) {
+      const previous = deduped[deduped.length - 1];
+      if (previous && Math.abs(previous.x - point.x) < 0.0005) {
+        deduped[deduped.length - 1] = point;
+      } else {
+        deduped.push(point);
+      }
+    }
+
+    const limitedInternal = deduped.slice(0, maxInternalPoints).map((point) => ({
+      x: roundCurvePoint(point.x),
+      y: roundCurvePoint(point.y),
+    }));
+
+    return [
+      { x: 0, y: 0 },
+      ...limitedInternal,
+      { x: 1, y: 1 },
+    ];
+  }
+
+  function cloneToneCurvePoints(points) {
+    return normalizeToneCurvePoints(points).map((point) => ({ x: point.x, y: point.y }));
+  }
+
+  function isNeutralToneCurvePoints(points) {
+    const normalized = normalizeToneCurvePoints(points);
+    if (normalized.length !== 2) return false;
+    const first = normalized[0];
+    const last = normalized[1];
+    return first.x === 0 && first.y === 0 && last.x === 1 && last.y === 1;
+  }
+
+  function toneCurvePointsFromLegacyStrength(strengthRaw) {
+    const strength = clamp(Number(strengthRaw) || 0, 0, 100) / 100;
+    if (strength <= 0.0001) {
+      return createNeutralToneCurvePoints();
+    }
+
+    const shoulderLift = 0.033 * strength;
+    return normalizeToneCurvePoints([
+      { x: 0, y: 0 },
+      { x: 0.25, y: clamp(0.25 - shoulderLift, 0, 1) },
+      { x: 0.75, y: clamp(0.75 + shoulderLift, 0, 1) },
+      { x: 1, y: 1 },
+    ]);
+  }
+
+  function sampleToneCurveLinear(points, xRaw) {
+    const x = clamp(Number(xRaw) || 0, 0, 1);
+    const normalized = normalizeToneCurvePoints(points);
+    if (x <= 0) return 0;
+    if (x >= 1) return 1;
+
+    for (let i = 0; i < normalized.length - 1; i += 1) {
+      const left = normalized[i];
+      const right = normalized[i + 1];
+      if (x < left.x || x > right.x) continue;
+      const span = Math.max(0.000001, right.x - left.x);
+      const t = (x - left.x) / span;
+      return clamp(left.y + (right.y - left.y) * t, 0, 1);
+    }
+
+    return x;
+  }
+
+  function estimateLegacyToneCurveStrengthFromPoints(points) {
+    const normalized = normalizeToneCurvePoints(points);
+    if (isNeutralToneCurvePoints(normalized)) return 0;
+    const quarterSample = sampleToneCurveLinear(normalized, 0.25);
+    const threeQuarterSample = sampleToneCurveLinear(normalized, 0.75);
+    const offset = Math.max(0, ((0.25 - quarterSample) + (threeQuarterSample - 0.75)) * 0.5);
+    return clamp(Math.round((offset / 0.033) * 100), 0, 100);
   }
 
   function buildFallbackImageStats(isHdrMerged = false) {
@@ -93,6 +224,11 @@
   }
 
   function clampEditorAdjustments(adjustments, { rotation = 0 } = {}) {
+    const toneCurve = clamp(Math.round(adjustments.toneCurve || 0), 0, 100);
+    const toneCurvePoints = Array.isArray(adjustments?.toneCurvePoints)
+      ? normalizeToneCurvePoints(adjustments.toneCurvePoints)
+      : toneCurvePointsFromLegacyStrength(toneCurve);
+
     return {
       exposure: clamp(Math.round(adjustments.exposure || 0), -400, 400),
       contrast: clamp(Math.round(adjustments.contrast || 0), -100, 100),
@@ -100,7 +236,8 @@
       shadows: clamp(Math.round(adjustments.shadows || 0), -100, 100),
       whites: clamp(Math.round(adjustments.whites || 0), -100, 100),
       blacks: clamp(Math.round(adjustments.blacks || 0), -100, 100),
-      toneCurve: clamp(Math.round(adjustments.toneCurve || 0), 0, 100),
+      toneCurve,
+      toneCurvePoints,
       clarity: clamp(Math.round(adjustments.clarity || 0), -100, 100),
       dehaze: clamp(Math.round(adjustments.dehaze || 0), -100, 100),
       vibrance: clamp(Math.round(adjustments.vibrance || 0), -100, 100),
@@ -505,6 +642,10 @@
     PRESET_ADJUSTMENT_KEYS.forEach((key) => {
       out[key] = normalizePresetAdjustmentValue(key, values[key]);
     });
+    out.toneCurvePoints = normalizeToneCurvePoints(values?.toneCurvePoints);
+    if (isNeutralToneCurvePoints(out.toneCurvePoints) && out.toneCurve > 0) {
+      out.toneCurvePoints = toneCurvePointsFromLegacyStrength(out.toneCurve);
+    }
     return out;
   }
 
@@ -519,6 +660,7 @@
         ? Number((value / 100).toFixed(2))
         : Math.round(value);
     });
+    payload.toneCurvePoints = normalizeToneCurvePoints(adjustments?.toneCurvePoints);
 
     return payload;
   }
@@ -530,6 +672,11 @@
     };
     const toneCurveRaw = Number(merged.toneCurve);
     merged.toneCurve = Number.isFinite(toneCurveRaw) ? clamp(Math.round(toneCurveRaw), 0, 100) : 0;
+    const hasExplicitCurvePoints = adjustments
+      && Object.prototype.hasOwnProperty.call(adjustments, 'toneCurvePoints');
+    merged.toneCurvePoints = hasExplicitCurvePoints
+      ? normalizeToneCurvePoints(adjustments.toneCurvePoints)
+      : toneCurvePointsFromLegacyStrength(merged.toneCurve);
     return merged;
   }
 
@@ -560,9 +707,19 @@
 
   return {
     FLAT_HDR_RECOVERY_TRIGGER,
-    defaultAdjustments: { ...defaultAdjustments },
+    MAX_TONE_CURVE_POINTS,
+    defaultAdjustments: {
+      ...defaultAdjustments,
+      toneCurvePoints: cloneToneCurvePoints(defaultAdjustments.toneCurvePoints),
+    },
     PRESET_ADJUSTMENT_KEYS: [...PRESET_ADJUSTMENT_KEYS],
     clamp,
+    createNeutralToneCurvePoints,
+    normalizeToneCurvePoints,
+    cloneToneCurvePoints,
+    isNeutralToneCurvePoints,
+    toneCurvePointsFromLegacyStrength,
+    estimateLegacyToneCurveStrengthFromPoints,
     buildFallbackImageStats,
     clampEditorAdjustments,
     estimateAutoAdjustments,

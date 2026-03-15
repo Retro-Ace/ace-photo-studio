@@ -45,9 +45,14 @@
         <div class="topbar">
           <div class="actions actions-main">
             <div class="topbar-action-group topbar-action-group-import" role="group" aria-label="Import actions">
-              <button class="primary" id="addPhotosBtn">Add Photos</button>
-              <button id="addFolderBtn">Add Folder</button>
-              <button id="addHdrFolderBtn">Add HDR Folder</button>
+              <div class="command-menu-wrap">
+                <button class="primary command-menu-trigger" id="importMenuBtn" type="button" aria-haspopup="menu" aria-expanded="false">Import ▾</button>
+                <div id="importMenu" class="command-menu hidden" role="menu" aria-label="Import actions menu">
+                  <button id="addPhotosBtn" class="command-menu-item" type="button" role="menuitem">Add Photos…</button>
+                  <button id="addFolderBtn" class="command-menu-item" type="button" role="menuitem">Add Folder…</button>
+                  <button id="addHdrFolderBtn" class="command-menu-item" type="button" role="menuitem">Add HDR Folder…</button>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -60,14 +65,7 @@
 
           <div class="actions actions-export">
             <div class="topbar-action-group topbar-action-group-export" role="group" aria-label="Export actions">
-              <button id="saveCurrentBtn">Export Current JPG</button>
-              <button id="exportAllBtn">Export All JPG</button>
-              <button id="exportMergedHdrBtn">Batch HDR Export</button>
-              <label class="quality-inline" for="hdrExportQuality">
-                <span>Quality</span>
-                <input type="range" id="hdrExportQuality" min="60" max="100" value="92" />
-                <span id="hdrExportQualityValue">92</span>
-              </label>
+              <button class="primary" id="exportBtn" type="button">Export</button>
             </div>
           </div>
         </div>
@@ -90,15 +88,8 @@
                 </button>
 
                 <div class="left-stack-content" id="hdrWorkflowContent">
-                  <div class="controls-section hdr-workflow" id="hdrWorkflow">
+                  <div class="hdr-workflow" id="hdrWorkflow">
                     <div class="hdr-top-area">
-                      <div class="hdr-workflow-head">
-                        <div>
-                          <h3>Batch HDR Merge</h3>
-                          <p>Detect bracketed RAW sets and output 16-bit TIFF masters</p>
-                        </div>
-                      </div>
-
                       <div class="hdr-action-row">
                         <button class="primary hdr-primary-action" id="startHdrMergePanelBtn">Start HDR Merge</button>
                         <button class="quiet" id="cancelHdrMergeBtn">Cancel</button>
@@ -107,6 +98,7 @@
                       <div class="hdr-action-row hdr-action-row-secondary">
                         <button class="open-output" id="openHdrOutputFolderBtn">Open Output Folder</button>
                         <button class="retry" id="retryFailedBtn">Retry Failed</button>
+                        <button id="exportMergedHdrBtn">Batch HDR Export</button>
                       </div>
 
                       <div class="hdr-select-grid">
@@ -274,6 +266,35 @@
                   ></canvas>
                 </div>
 
+                <div class="tone-curve-card" id="toneCurveSection">
+                  <div class="tone-curve-head">
+                    <button
+                      id="toneCurveSectionToggleBtn"
+                      class="tone-curve-section-toggle"
+                      type="button"
+                      aria-expanded="true"
+                      aria-controls="toneCurveSectionBody"
+                    >
+                      <span class="tone-curve-chevron" aria-hidden="true"></span>
+                      <span class="tone-curve-title-wrap">
+                        <span class="tone-curve-title">Tone Curve</span>
+                        <span class="tone-curve-mode">Luminance</span>
+                      </span>
+                    </button>
+                    <button id="toneCurveResetBtn" class="tone-curve-reset-btn quiet" type="button">Reset Curve</button>
+                  </div>
+                  <div class="tone-curve-body" id="toneCurveSectionBody">
+                    <canvas
+                      id="toneCurveCanvas"
+                      class="tone-curve-canvas"
+                      width="256"
+                      height="132"
+                      role="img"
+                      aria-label="Luminance tone curve graph"
+                    ></canvas>
+                  </div>
+                </div>
+
                 <div id="controls"></div>
 
                 <div class="toggle-row">
@@ -333,6 +354,98 @@
         <div class="preset-modal-actions">
           <button id="cancelSavePresetBtn" type="button">Cancel</button>
           <button id="confirmSavePresetBtn" class="primary" type="button">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="preset-modal-backdrop hidden" id="exportSettingsModal" aria-hidden="true">
+      <div class="preset-modal-card export-settings-card" role="dialog" aria-modal="true" aria-labelledby="exportSettingsModalTitle">
+        <h3 id="exportSettingsModalTitle">Export Settings</h3>
+        <div class="export-settings-group">
+          <div class="export-settings-label">Scope</div>
+          <div class="export-scope-segment" id="exportScopeGroup" role="group" aria-label="Export scope">
+            <button id="exportScopePreviewBtn" class="export-scope-btn is-active" type="button" data-export-scope="current-preview">Current Preview</button>
+            <button id="exportScopeSelectionBtn" class="export-scope-btn" type="button" data-export-scope="current-selection">Current Selection</button>
+            <button id="exportScopeAllBtn" class="export-scope-btn" type="button" data-export-scope="all-loaded">All Loaded Photos</button>
+          </div>
+        </div>
+        <div class="export-settings-group">
+          <div class="export-settings-label">Output Folder</div>
+          <div class="export-output-folder-path" id="exportOutputFolderValue" data-allow-select="true">Choose on each export</div>
+          <div class="export-settings-actions">
+            <button id="setExportOutputFolderBtn" type="button">Select Folder…</button>
+            <button id="clearExportOutputFolderBtn" type="button">Clear</button>
+            <button id="openExportOutputFolderBtn" type="button">Reveal Folder</button>
+          </div>
+        </div>
+        <div class="export-settings-group quality-settings-group">
+          <label for="hdrExportQuality">JPG Quality</label>
+          <div class="quality-row">
+            <input type="range" id="hdrExportQuality" min="60" max="100" value="92" />
+            <span id="hdrExportQualityValue">92</span>
+          </div>
+        </div>
+        <div class="preset-modal-actions">
+          <button id="cancelExportSettingsBtn" type="button">Cancel</button>
+          <button id="confirmExportFromSettingsBtn" class="primary" type="button">Export</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="preset-modal-backdrop hidden" id="exportResultModal" aria-hidden="true">
+      <div class="preset-modal-card export-result-card" role="dialog" aria-modal="true" aria-labelledby="exportResultModalTitle">
+        <h3 id="exportResultModalTitle">Export Complete</h3>
+        <div class="export-result-summary" id="exportResultSummaryText">Your export finished.</div>
+        <div class="export-result-stats">
+          <div class="export-result-stat">
+            <div class="export-result-stat-label">Saved</div>
+            <div class="export-result-stat-value" id="exportResultSavedCount">0</div>
+          </div>
+          <div class="export-result-stat">
+            <div class="export-result-stat-label">Failed</div>
+            <div class="export-result-stat-value" id="exportResultFailedCount">0</div>
+          </div>
+        </div>
+        <div class="export-result-folder">
+          <div class="export-result-folder-label">Output Folder</div>
+          <div class="export-output-folder-path" id="exportResultOutputFolder" data-allow-select="true"></div>
+        </div>
+        <div class="export-result-file-row hidden" id="exportResultFileRow">
+          <div class="export-result-folder-label">Saved File</div>
+          <div class="export-result-file-name" id="exportResultSavedFileName" data-allow-select="true"></div>
+        </div>
+        <div class="preset-modal-actions">
+          <button id="exportResultRevealBtn" type="button">Reveal Folder</button>
+          <button id="closeExportResultBtn" class="primary" type="button">Done</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="preset-modal-backdrop hidden" id="hdrMergeResultModal" aria-hidden="true">
+      <div class="preset-modal-card export-result-card hdr-merge-result-card" role="dialog" aria-modal="true" aria-labelledby="hdrMergeResultModalTitle">
+        <h3 id="hdrMergeResultModalTitle">HDR Merge Complete</h3>
+        <div class="export-result-summary" id="hdrMergeResultSummaryText">Batch HDR merge completed successfully.</div>
+        <div class="export-result-stats">
+          <div class="export-result-stat">
+            <div class="export-result-stat-label">Merged TIFFs</div>
+            <div class="export-result-stat-value" id="hdrMergeResultMergedCount">0</div>
+          </div>
+          <div class="export-result-stat">
+            <div class="export-result-stat-label">Loaded in Library</div>
+            <div class="export-result-stat-value" id="hdrMergeResultLoadedCount">0</div>
+          </div>
+        </div>
+        <div class="export-result-folder">
+          <div class="export-result-folder-label">Output Folder</div>
+          <div class="export-output-folder-path" id="hdrMergeResultOutputFolder" data-allow-select="true"></div>
+        </div>
+        <div class="export-result-file-row" id="hdrMergeResultLatestFileRow">
+          <div class="export-result-folder-label">Latest TIFF</div>
+          <div class="export-result-file-name" id="hdrMergeResultLatestFileName" data-allow-select="true"></div>
+        </div>
+        <div class="preset-modal-actions">
+          <button id="hdrMergeResultRevealBtn" type="button">Reveal Folder</button>
+          <button id="closeHdrMergeResultBtn" class="primary" type="button">Done</button>
         </div>
       </div>
     </div>

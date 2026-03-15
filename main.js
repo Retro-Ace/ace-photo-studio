@@ -1347,8 +1347,12 @@ async function normalizeInputPaths(inputPaths, { metadataByPath = new Map() } = 
 
     if (rawService.isRawFile(resolvedPath)) {
       try {
-        const conversion = await rawService.convertRawToTiff(resolvedPath);
-        const preview = await rawService.ensureRawPreviewImage(resolvedPath, conversion.outputPath);
+        const conversion = await rawService.convertRawToTiff(resolvedPath, null, {
+          context: 'single-import',
+        });
+        const preview = await rawService.ensureRawPreviewImage(resolvedPath, conversion.outputPath, {
+          lensCorrectionRequested: Boolean(conversion?.lensCorrection?.requested),
+        });
 
         normalized.push({
           originalPath: resolvedPath,

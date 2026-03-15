@@ -22,9 +22,9 @@ This document describes the current implementation boundaries and flow paths in 
 - `preload.js`
   - API contract surface for renderer.
 - `renderer.js`
-  - Library/selection state, compare view, adjustments, presets, Auto Fix, histogram, export flow.
+  - Library/selection state, compare view, adjustments, presets, Auto Fix, histogram, tone curve, top-bar import/export flow.
 - `raw-service.js`
-  - RAW conversion (`ace-dng-sdk-helper` preferred for DNG), preview JPEG generation (`sips`).
+  - RAW conversion (`ace-dng-sdk-helper` preferred for DNG), DJI Mavic 3 manual/profile lens-correction fallback, preview JPEG generation (`sips`).
 - `hdr-service.js`
   - Converts set inputs to TIFF, starts merge worker, manages active worker cancellation.
 - `merge-worker.js`
@@ -38,7 +38,7 @@ This document describes the current implementation boundaries and flow paths in 
 
 1. Renderer requests normalization through `aceApi.normalizePaths`.
 2. Main resolves files and calls `normalizeInputPaths`.
-3. RAW files are converted to TIFF via `RawService.convertRawToTiff`.
+3. RAW files are converted to TIFF via `RawService.convertRawToTiff` with `context: single-import`.
 4. Preview JPEGs are generated and returned as renderer-consumable items.
 5. Renderer stores items in `state.photos` with neutral `defaultAdjustments`.
 
@@ -47,7 +47,7 @@ This document describes the current implementation boundaries and flow paths in 
 1. Renderer triggers `start-batch-hdr-merge` with folder/files + options.
 2. Main performs bracket detection with metadata-aware grouping.
 3. Queue state is initialized and broadcast via `hdr-queue-update`.
-4. Each set is processed through `HdrService.mergeGroup` -> `merge-worker.js`.
+4. Each set is processed through `HdrService.mergeGroup` -> `RawService.convertRawToTiff` with `context: hdr-merge-source` -> `merge-worker.js`.
 5. Worker stages set inputs in isolated temp workspace and runs alignment/merge.
 6. Worker writes merged TIFF atomically and validates `BitsPerSample == 16`.
 7. Main records queue result and loads merged TIFFs into library on completion.
@@ -61,9 +61,11 @@ This document describes the current implementation boundaries and flow paths in 
 
 ### 4) Export Path
 
-1. Renderer prepares JPEG data URLs from selected/all photos.
-2. Main writes files with temp-path + rename semantics.
-3. HDR strict export naming path uses merged metadata (`shootDate/sourceFolder/setIndex/quality`).
+1. User opens top-bar `Export` -> `Export Settings` modal and selects scope (`Current Preview`, `Current Selection`, `All Loaded Photos`).
+2. Renderer prepares JPEG data URLs for that scope.
+3. Main writes files with temp-path + rename semantics to the selected output folder.
+4. Normal export completion uses ACE-styled export result modal in renderer.
+5. HDR strict export naming path uses merged metadata (`shootDate/sourceFolder/setIndex/quality`).
 
 ## Major Invariants To Protect
 
@@ -77,27 +79,15 @@ This document describes the current implementation boundaries and flow paths in 
 - Retry semantics: retry failed sets only, not full rescan.
 - Merged HDR masters must be 16-bit TIFF.
 
-## Lens-Correction Debug Bypass (Current State)
+## Lens-Correction Path (Current)
 
-Location: `renderer.js`, `processImageToDataUrl`.
-
-Current code contains:
-
-- `// TEMPORARILY DISABLED FOR DEBUG:`
-- A commented-out call: `imageData = applyLensCorrection(imageData, options?.lensParams);`
-
-Interpretation:
-
-- This is a **commented bypass marker** (not active executable bypass logic).
-- Lens correction is currently **not applied** in this renderer preview path.
-- The marker indicates a prior debug intervention and should be treated as a tracked hardening item.
-
-Safe removal conditions for a future narrow pass:
-
-1. Re-enable only behind an explicit feature flag or guarded switch.
-2. Validate preview/export parity before/after re-enable.
-3. Validate HDR reference sets (flat and already-good controls) for regressions.
-4. Confirm neutral load/reset and compare behavior stay unchanged.
+- Lens correction is handled in RAW conversion (`raw-service.js`), not as a renderer preview-only effect.
+- Current production behavior:
+  - `context: hdr-merge-source`: applies to eligible DJI Mavic 3 DNG merge inputs.
+  - `context: single-import`: applies to eligible single imported DJI Mavic 3 DNGs.
+- Embedded-opcode correction is probed first; manual/profile fallback is the active reliable path when needed.
+- Safe disable flag:
+  - `ACE_DISABLE_DJI_M3_LENS_CORRECTION_PREMERGE=1`
 
 ## Renderer State Coupling (Current Reality)
 
