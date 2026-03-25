@@ -135,7 +135,7 @@ Merged HDR masters are validated in `merge-worker.js`:
 - Requires all channel values equal `16`.
 - Throws `HDR_OUTPUT_NOT_16BIT_TIFF` and removes invalid output if check fails.
 
-## Export Flow Notes (v1.1.0)
+## Export Flow Notes (v1.1.1)
 
 - Normal JPG exports are initiated from top-bar `Export` -> `Export Settings`.
 - Scope choices:

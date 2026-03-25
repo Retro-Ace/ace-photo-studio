@@ -2,6 +2,8 @@
 
 Use this as the final manual + script gate after significant UI/editing/HDR changes.
 
+Current release target: v1.1.1.
+
 ## How to Use
 
 - Mark each item `PASS`, `FAIL`, or `N/A`.

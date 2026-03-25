@@ -1,4 +1,4 @@
-# ACE Photo Studio v1.1.0 - Quick Start Guide
+# ACE Photo Studio v1.1.1 - Quick Start Guide
 
 ## 1) What ACE Photo Studio Is
 
@@ -31,6 +31,11 @@ You can import photos, merge bracket sets into 16-bit TIFF masters, edit, compar
    - **Retry Failed** to retry only failed sets
    - **Open Output Folder** to jump to HDR outputs in Finder
 8. When the queue finishes, an **HDR Merge Complete** result modal summarizes outputs and provides a quick Finder reveal action.
+
+## 7) Notes for v1.1.1
+
+- Large HDR batch loads now stay more responsive by inserting results in smaller chunks and avoiding unnecessary full-library preview hydration.
+- Normal export, merge isolation, compare, reset, presets, and tone curve workflows remain unchanged.
 
 ## 4) Preview and Compare
 

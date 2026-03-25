@@ -173,6 +173,8 @@ const TONE_CURVE_MAX_POINTS = editorCore?.MAX_TONE_CURVE_POINTS || 8;
 const TONE_CURVE_HANDLE_RADIUS = 4;
 const TONE_CURVE_HANDLE_HIT_RADIUS = 9;
 const TONE_CURVE_MIN_X_GAP = 0.03;
+const LARGE_LIBRARY_IMPORT_THRESHOLD = 24;
+const LARGE_LIBRARY_IMPORT_BATCH_SIZE = 16;
 // Auto-fix calibration anchors from live references:
 // - hdr-set-2: flat/washed merged HDR should trigger stronger recovery
 // - hdr-set-5: already-good control should avoid recovery branch
@@ -937,6 +939,10 @@ function clearPreviewTimers() {
     clearTimeout(state.histogram.refreshTimer);
     state.histogram.refreshTimer = null;
   }
+}
+
+function yieldToMainThread() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 function queueViewportQualityRefresh({ debounceMs = 180 } = {}) {
@@ -2651,7 +2657,10 @@ async function refreshAllThumbnails() {
   }
 }
 
-async function addNormalizedItems(normalizedItems, { suppressDuplicateAlert = false } = {}) {
+async function addNormalizedItems(normalizedItems, {
+  suppressDuplicateAlert = false,
+  refreshMode = 'auto',
+} = {}) {
   if (!normalizedItems?.length) {
     if (!suppressDuplicateAlert) {
       alert('No supported images were found.');
@@ -2697,20 +2706,36 @@ async function addNormalizedItems(normalizedItems, { suppressDuplicateAlert = fa
     return;
   }
 
-  state.photos.push(...newItems);
+  const shouldRefreshAllThumbnails = refreshMode === 'all'
+    || (refreshMode === 'auto' && newItems.length <= LARGE_LIBRARY_IMPORT_THRESHOLD);
+  const shouldChunkInsert = newItems.length > LARGE_LIBRARY_IMPORT_THRESHOLD;
+  const batchSize = shouldChunkInsert ? LARGE_LIBRARY_IMPORT_BATCH_SIZE : newItems.length;
 
-  if (!state.selectedId && state.photos[0]) {
-    state.selectedId = state.photos[0].id;
-    state.selectedPhotoIds = new Set([state.selectedId]);
-    state.selectionAnchorId = state.selectedId;
+  for (let i = 0; i < newItems.length; i += batchSize) {
+    const batch = newItems.slice(i, i + batchSize);
+    state.photos.push(...batch);
+
+    if (!state.selectedId && state.photos[0]) {
+      state.selectedId = state.photos[0].id;
+      state.selectedPhotoIds = new Set([state.selectedId]);
+      state.selectionAnchorId = state.selectedId;
+    }
+
+    normalizeLibrarySelectionState();
+    render();
+
+    if (shouldChunkInsert && i + batchSize < newItems.length) {
+      await yieldToMainThread();
+    }
   }
-  normalizeLibrarySelectionState();
 
   resetView();
-  render();
   await refreshSelectedPreview({ autoFit: true });
-  await refreshAllThumbnails();
-  render();
+
+  if (shouldRefreshAllThumbnails) {
+    await refreshAllThumbnails();
+    render();
+  }
 }
 
 async function addFiles(paths, { skipRawDecoderCheck = false, suppressDuplicateAlert = false } = {}) {
@@ -4301,6 +4326,7 @@ async function loadMergedResultsIntoLibrary(mergedResults) {
 
   await addNormalizedItems(normalizedItems, {
     suppressDuplicateAlert: true,
+    refreshMode: 'selected-only',
   });
 
   for (const result of toLoad) {

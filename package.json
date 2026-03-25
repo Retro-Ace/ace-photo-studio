@@ -1,6 +1,6 @@
 {
   "name": "ace-photo-studio",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "ACE Photo Studio Mac App",
   "main": "src/main/main.js",
   "author": "Tony LaRosa",

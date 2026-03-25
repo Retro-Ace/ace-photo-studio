@@ -1,4 +1,4 @@
-# ACE Photo Studio v1.1.0
+# ACE Photo Studio v1.1.1
 
 ACE Photo Studio is a macOS Electron desktop app for DJI DNG bracket workflows:
 
@@ -9,7 +9,7 @@ ACE Photo Studio is a macOS Electron desktop app for DJI DNG bracket workflows:
 5. Apply cleanup adjustments/presets.
 6. Export final JPEGs.
 
-![ACE Photo Studio Main v1.1.0](assets/Ace%20Photo%20Studio%20Main%20v1.1.0.png)
+![ACE Photo Studio Main](assets/Ace%20Photo%20Studio%20Main%20v1.1.1.png)
 
 Current focus areas:
 - merge correctness and workflow safety
@@ -70,6 +70,7 @@ This README is implementation-aligned with the current codebase (not aspirationa
   - cleaner Batch HDR area/queue readability
   - right Adjustments panel scroll behavior for longer control stacks
   - 90/270 rotation path keeps geometry stable
+  - large-batch library insertion now yields between chunks and defers unnecessary full thumbnail hydration
 - Validation coverage:
   - merge isolation test
   - bracket grouping test
